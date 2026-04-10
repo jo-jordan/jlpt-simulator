@@ -1,0 +1,253 @@
+import type { StudyEntry, StudyLibrary } from '../types'
+
+const vocabularyItemTypes = ['漢字読み', '表記', '語形成', '文脈規定', '言い換え類義', '用法']
+const grammarItemTypes = ['文の文法1', '文の文法2', '文章の文法']
+
+function makeEntry(entry: Partial<StudyEntry> & Pick<StudyEntry, 'id' | 'type' | 'term' | 'meaning'>): StudyEntry {
+  const itemTypeList = entry.type === 'grammar' ? grammarItemTypes : vocabularyItemTypes
+  const itemType =
+    entry.item_type ??
+    itemTypeList[
+      Array.from(entry.term).reduce((total, char) => total + char.charCodeAt(0), 0) %
+        itemTypeList.length
+    ]
+
+  return {
+    id: entry.id,
+    level: 'N2',
+    section: 'language_knowledge',
+    subsection: entry.type,
+    item_type: itemType,
+    source_type: 'original',
+    title: null,
+    instructions_ja:
+      entry.type === 'grammar'
+        ? '文法として最も適切なものを選んでください。'
+        : '語彙として最も適切なものを選んでください。',
+    instructions_zh:
+      entry.type === 'grammar' ? '请选择最合适的语法项目。' : '请选择最合适的词汇项目。',
+    passage: {
+      text: entry.example ?? null,
+      segments: entry.example ? [entry.example] : [],
+      metadata: {},
+    },
+    question: {
+      stem: entry.term,
+      blank_positions: [],
+      choices: [],
+      correct_choice_id: null,
+      correct_answers: [],
+      answer_format: 'single_choice',
+    },
+    audio: {
+      audio_id: null,
+      transcript: null,
+      speaker_notes: [],
+      play_limit: 1,
+    },
+    explanation: {
+      ja: entry.notes ?? null,
+      zh: null,
+      grammar_points: entry.type === 'grammar' ? [entry.term] : [],
+      vocab_points: entry.type === 'vocabulary' ? [entry.term] : [],
+    },
+    tags: [],
+    difficulty: 'medium',
+    estimated_time_sec: entry.type === 'grammar' ? 75 : 45,
+    type: entry.type,
+    term: entry.term,
+    meaning: entry.meaning,
+    reading: entry.reading,
+    example: entry.example,
+    notes: entry.notes,
+    sourceTitle: entry.sourceTitle,
+  }
+}
+
+export const starterLibrary: StudyLibrary = {
+  title: 'JLPT N2 Starter Deck',
+  level: 'N2',
+  updatedAt: new Date('2026-04-11T00:00:00+09:00').toISOString(),
+  quizSets: [],
+  entries: [
+    makeEntry({
+      id: 'v1',
+      type: 'vocabulary',
+      term: 'わざわざ',
+      meaning: 'to go out of one’s way to do something',
+      example: '忙しいのに、わざわざ来てくれてありがとう。',
+      notes: 'Often used to show appreciation or annoyance depending on tone.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v2',
+      type: 'vocabulary',
+      term: '実績',
+      reading: 'じっせき',
+      meaning: 'track record; achievement',
+      example: 'これまでの実績が評価されて昇進した。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v3',
+      type: 'vocabulary',
+      term: '補う',
+      reading: 'おぎなう',
+      meaning: 'to compensate for; to supplement',
+      example: '不足している栄養をサプリで補う。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v4',
+      type: 'vocabulary',
+      term: '意外',
+      reading: 'いがい',
+      meaning: 'unexpected; surprising',
+      example: '結果は意外にも彼の勝ちだった。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v5',
+      type: 'vocabulary',
+      term: '生じる',
+      reading: 'しょうじる',
+      meaning: 'to arise; to occur',
+      example: '小さな誤解から大きな問題が生じた。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v6',
+      type: 'vocabulary',
+      term: '乏しい',
+      reading: 'とぼしい',
+      meaning: 'scarce; lacking',
+      example: '彼は経験が乏しいが、やる気は十分ある。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v7',
+      type: 'vocabulary',
+      term: '維持',
+      reading: 'いじ',
+      meaning: 'maintenance; preservation',
+      example: '健康を維持するには睡眠も大切だ。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v8',
+      type: 'vocabulary',
+      term: 'ますます',
+      meaning: 'more and more; increasingly',
+      example: '日本語の勉強がますます楽しくなってきた。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v9',
+      type: 'vocabulary',
+      term: '適応',
+      reading: 'てきおう',
+      meaning: 'adaptation; adjustment',
+      example: '新しい環境への適応には時間がかかる。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'v10',
+      type: 'vocabulary',
+      term: '確保',
+      reading: 'かくほ',
+      meaning: 'securing; ensuring',
+      example: '試験前は睡眠時間を確保したい。',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g1',
+      type: 'grammar',
+      term: '〜わけではない',
+      meaning: 'it does not mean that...; not necessarily',
+      example: '高いレストランが必ずしもおいしいわけではない。',
+      notes: 'Partial negation. Rejects an overgeneralized conclusion.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g2',
+      type: 'grammar',
+      term: '〜ことになる',
+      meaning: 'it has been decided that...; it turns out that...',
+      example: '来月から大阪支社で働くことになった。',
+      notes: 'Used for decisions or resulting situations.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g3',
+      type: 'grammar',
+      term: '〜に違いない',
+      meaning: 'must be; surely',
+      example: 'あの様子だと、彼は合格したに違いない。',
+      notes: 'Strong speaker conviction based on evidence.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g4',
+      type: 'grammar',
+      term: '〜おそれがある',
+      meaning: 'there is a risk that...; may possibly',
+      example: 'このままでは電車が遅れるおそれがある。',
+      notes: 'Used for undesirable possibilities.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g5',
+      type: 'grammar',
+      term: '〜ようにする',
+      meaning: 'make an effort to; try to ensure',
+      example: '毎日、日本語の記事を読むようにしている。',
+      notes: 'Habit-building or conscious effort.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g6',
+      type: 'grammar',
+      term: '〜反面',
+      meaning: 'while; on the other hand',
+      example: 'この町は便利な反面、家賃が高い。',
+      notes: 'Contrasts two sides of the same thing.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g7',
+      type: 'grammar',
+      term: '〜っぽい',
+      meaning: 'seems like; has a tendency toward',
+      example: '彼は忘れっぽいので、メモが必要だ。',
+      notes: 'Often casual and subjective.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g8',
+      type: 'grammar',
+      term: '〜ものの',
+      meaning: 'although; even though',
+      example: '日本へ留学したものの、友達ができず苦労した。',
+      notes: 'Often introduces an unsatisfactory contrast.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g9',
+      type: 'grammar',
+      term: '〜せいで',
+      meaning: 'because of; due to',
+      example: '寝不足のせいで、授業に集中できなかった。',
+      notes: 'Usually used for negative outcomes.',
+      sourceTitle: 'Starter Deck',
+    }),
+    makeEntry({
+      id: 'g10',
+      type: 'grammar',
+      term: '〜ことはない',
+      meaning: 'there is no need to...; don’t have to',
+      example: 'まだ時間があるから、急ぐことはない。',
+      notes: 'Used to reassure or remove necessity.',
+      sourceTitle: 'Starter Deck',
+    }),
+  ],
+}

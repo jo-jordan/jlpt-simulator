@@ -1,0 +1,16 @@
+name = "jlpt-simulator"
+main = "worker/index.ts"
+compatibility_date = "2025-04-11"
+
+[assets]
+directory = "./dist/client"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "jlpt-simulator-db"
+database_id = "4eb06667-c4b6-4fd8-ab6a-53481abd0c51"
+
+[vars]
+APP_BASE_URL = "https://jlpt-simulator.tyyzmyd.workers.dev"

@@ -1,0 +1,78 @@
+:root {
+  --bg: #f5efdf;
+  --panel: linear-gradient(180deg, rgba(255, 250, 243, 0.92), rgba(244, 234, 218, 0.92));
+  --border: rgba(113, 84, 52, 0.16);
+  --ink: #1e2018;
+  --muted: #645a4d;
+  --accent: #c7682d;
+  --accent-strong: #9b4c1d;
+  --shadow:
+    0 24px 60px rgba(107, 77, 44, 0.12),
+    0 10px 24px rgba(107, 77, 44, 0.08);
+
+  --sans: 'IBM Plex Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+  --heading: 'Fraunces', 'Times New Roman', serif;
+  --mono: 'IBM Plex Mono', 'SFMono-Regular', monospace;
+
+  font: 17px/1.5 var(--sans);
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.75), transparent 32%),
+    linear-gradient(180deg, #fbf6eb 0%, #f2e6d3 48%, #efe1ca 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+}
+
+#root {
+  min-height: 100svh;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--heading);
+  font-weight: 600;
+  line-height: 1.05;
+}
+
+h1 {
+  font-size: clamp(2.8rem, 6vw, 5.4rem);
+  letter-spacing: -0.05em;
+  max-width: 11ch;
+}
+
+h2 {
+  font-size: clamp(1.4rem, 2vw, 2rem);
+}
+
+h3 {
+  font-size: 1.35rem;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+}
+
+a {
+  color: inherit;
+}

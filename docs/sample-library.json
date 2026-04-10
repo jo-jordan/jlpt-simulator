@@ -1,0 +1,96 @@
+{
+  "title": "My JLPT N2 Notes",
+  "level": "N2",
+  "quizSets": [],
+  "entries": [
+    {
+      "id": "vocabulary-001",
+      "level": "N2",
+      "section": "language_knowledge",
+      "subsection": "vocabulary",
+      "item_type": "文脈規定",
+      "source_type": "original",
+      "title": null,
+      "instructions_ja": "語彙として最も適切なものを選んでください。",
+      "instructions_zh": "请选择最合适的词汇项目。",
+      "passage": {
+        "text": "周囲への配慮を忘れないようにしよう。",
+        "segments": ["周囲への配慮を忘れないようにしよう。"],
+        "metadata": {}
+      },
+      "question": {
+        "stem": "配慮",
+        "blank_positions": [],
+        "choices": [],
+        "correct_choice_id": null,
+        "correct_answers": [],
+        "answer_format": "single_choice"
+      },
+      "audio": {
+        "audio_id": null,
+        "transcript": null,
+        "speaker_notes": [],
+        "play_limit": 1
+      },
+      "explanation": {
+        "ja": "相手や周囲の状況をよく考えること。",
+        "zh": "表示对他人或周围情况的体谅与考虑。",
+        "grammar_points": [],
+        "vocab_points": ["配慮"]
+      },
+      "tags": ["workplace", "consideration"],
+      "difficulty": "medium",
+      "estimated_time_sec": 45,
+      "type": "vocabulary",
+      "term": "配慮",
+      "reading": "はいりょ",
+      "meaning": "consideration; thoughtfulness",
+      "example": "周囲への配慮を忘れないようにしよう。",
+      "notes": "Useful for workplace and social situations."
+    },
+    {
+      "id": "grammar-001",
+      "level": "N2",
+      "section": "language_knowledge",
+      "subsection": "grammar",
+      "item_type": "文の文法1",
+      "source_type": "original",
+      "title": null,
+      "instructions_ja": "文法として最も適切なものを選んでください。",
+      "instructions_zh": "请选择最合适的语法项目。",
+      "passage": {
+        "text": "それはうわさにすぎない。",
+        "segments": ["それはうわさにすぎない。"],
+        "metadata": {}
+      },
+      "question": {
+        "stem": "〜にすぎない",
+        "blank_positions": [],
+        "choices": [],
+        "correct_choice_id": null,
+        "correct_answers": [],
+        "answer_format": "single_choice"
+      },
+      "audio": {
+        "audio_id": null,
+        "transcript": null,
+        "speaker_notes": [],
+        "play_limit": 1
+      },
+      "explanation": {
+        "ja": "程度が低いことを表し、「ただ〜だけだ」という意味。",
+        "zh": "表示程度不高，相当于“只不过是……”。",
+        "grammar_points": ["〜にすぎない"],
+        "vocab_points": []
+      },
+      "tags": ["grammar", "limitation"],
+      "difficulty": "medium",
+      "estimated_time_sec": 75,
+      "type": "grammar",
+      "term": "〜にすぎない",
+      "meaning": "no more than; merely",
+      "example": "それはうわさにすぎない。",
+      "notes": "Used to downplay the importance or scale of something."
+    }
+  ]
+}
