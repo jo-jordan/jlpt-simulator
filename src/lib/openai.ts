@@ -146,7 +146,6 @@ export async function generateAiQuizSet({
     },
     body: JSON.stringify({
       model,
-      reasoning: { effort: 'minimal' },
       text: {
         format: {
           type: 'json_schema',
