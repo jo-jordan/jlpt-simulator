@@ -231,44 +231,54 @@ app.put('/api/library', async (c) => {
 })
 
 app.post('/api/quiz/generate', async (c) => {
-  const body = await c.req.json<{ durationMinutes?: number; label?: string }>()
-  const settings = await c.env.DB.prepare(
-    'SELECT openai_key_ciphertext, openai_model FROM user_settings WHERE user_id = ?',
-  )
-    .bind(c.get('userId'))
-    .first<UserSettingsRow>()
-  const libraryRow = await c.env.DB.prepare('SELECT library_json FROM user_libraries WHERE user_id = ?')
-    .bind(c.get('userId'))
-    .first<{ library_json: string }>()
+  try {
+    const body = await c.req.json<{ durationMinutes?: number; label?: string }>()
+    const [settings, libraryRow] = await Promise.all([
+      c.env.DB.prepare('SELECT openai_key_ciphertext, openai_model FROM user_settings WHERE user_id = ?')
+        .bind(c.get('userId'))
+        .first<UserSettingsRow>(),
+      c.env.DB.prepare('SELECT library_json FROM user_libraries WHERE user_id = ?')
+        .bind(c.get('userId'))
+        .first<{ library_json: string }>(),
+    ])
 
-  if (!settings?.openai_key_ciphertext) {
-    return jsonError('No stored OpenAI API key for this user.', 400)
+    if (!settings?.openai_key_ciphertext) {
+      return jsonError('No stored OpenAI API key for this user.', 400)
+    }
+
+    if (!c.env.APP_SECRET) {
+      return jsonError('Server misconfiguration: APP_SECRET is not set.', 500)
+    }
+
+    const library = libraryRow ? (JSON.parse(libraryRow.library_json) as StudyLibrary) : starterLibrary
+    const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
+    const quizSet = await generateAiQuizSet({
+      apiKey,
+      model: settings.openai_model || defaultOpenAiModels[0],
+      entries: library.entries,
+      durationMinutes: body.durationMinutes ?? 45,
+    })
+
+    if (body.label?.trim()) {
+      quizSet.title = body.label.trim()
+    }
+
+    const nextLibrary: StudyLibrary = {
+      ...library,
+      updatedAt: new Date().toISOString(),
+      quizSets: [quizSet, ...library.quizSets.filter((item) => item.id !== quizSet.id)],
+    }
+
+    await c.env.DB.prepare('UPDATE user_libraries SET library_json = ?, updated_at = ? WHERE user_id = ?')
+      .bind(JSON.stringify(nextLibrary), nextLibrary.updatedAt, c.get('userId'))
+      .run()
+
+    return c.json({ quizSet, library: nextLibrary })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[quiz/generate]', message)
+    return jsonError(`Quiz generation failed: ${message}`, 500)
   }
-
-  const library = libraryRow ? (JSON.parse(libraryRow.library_json) as StudyLibrary) : starterLibrary
-  const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
-  const quizSet = await generateAiQuizSet({
-    apiKey,
-    model: settings.openai_model || defaultOpenAiModels[0],
-    entries: library.entries,
-    durationMinutes: body.durationMinutes ?? 45,
-  })
-
-  if (body.label?.trim()) {
-    quizSet.title = body.label.trim()
-  }
-
-  const nextLibrary: StudyLibrary = {
-    ...library,
-    updatedAt: new Date().toISOString(),
-    quizSets: [quizSet, ...library.quizSets.filter((item) => item.id !== quizSet.id)],
-  }
-
-  await c.env.DB.prepare('UPDATE user_libraries SET library_json = ?, updated_at = ? WHERE user_id = ?')
-    .bind(JSON.stringify(nextLibrary), nextLibrary.updatedAt, c.get('userId'))
-    .run()
-
-  return c.json({ quizSet, library: nextLibrary })
 })
 
 app.all('/api/*', () => jsonError('Not found', 404))
