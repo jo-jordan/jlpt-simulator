@@ -33,6 +33,12 @@ function extractOutputText(data: OpenAiResponse) {
   return ''
 }
 
+const QUESTION_BASE = {
+  section: { type: 'string', enum: ['vocabulary', 'grammar', 'mixed'] },
+  prompt: { type: 'string' },
+  explanation: { type: 'string' },
+} as const
+
 function makeQuizSchema() {
   return {
     name: 'jlpt_quiz_set',
@@ -46,41 +52,46 @@ function makeQuizSchema() {
         questions: {
           type: 'array',
           items: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['kind', 'section', 'prompt', 'explanation', 'sentence', 'choices', 'correctIndex', 'fragments', 'correctOrder'],
-            properties: {
-              kind: {
-                type: 'string',
-                enum: ['single_select', 'cloze_select', 'order_select'],
+            anyOf: [
+              // single_select: requires sentence + choices + correctIndex
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['kind', 'section', 'prompt', 'explanation', 'sentence', 'choices', 'correctIndex'],
+                properties: {
+                  kind: { type: 'string', const: 'single_select' },
+                  ...QUESTION_BASE,
+                  sentence: { type: 'string' },
+                  choices: { type: 'array', items: { type: 'string' } },
+                  correctIndex: { type: 'number' },
+                },
               },
-              section: {
-                type: 'string',
-                enum: ['vocabulary', 'grammar', 'mixed'],
+              // cloze_select: requires sentence (with ＿＿＿) + choices + correctIndex
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['kind', 'section', 'prompt', 'explanation', 'sentence', 'choices', 'correctIndex'],
+                properties: {
+                  kind: { type: 'string', const: 'cloze_select' },
+                  ...QUESTION_BASE,
+                  sentence: { type: 'string' },
+                  choices: { type: 'array', items: { type: 'string' } },
+                  correctIndex: { type: 'number' },
+                },
               },
-              prompt: { type: 'string' },
-              explanation: { type: 'string' },
-              sentence: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-              choices: {
-                anyOf: [
-                  { type: 'array', items: { type: 'string' } },
-                  { type: 'null' },
-                ],
+              // order_select: requires fragments + correctOrder, no sentence/choices
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['kind', 'section', 'prompt', 'explanation', 'fragments', 'correctOrder'],
+                properties: {
+                  kind: { type: 'string', const: 'order_select' },
+                  ...QUESTION_BASE,
+                  fragments: { type: 'array', items: { type: 'string' } },
+                  correctOrder: { type: 'array', items: { type: 'string' } },
+                },
               },
-              correctIndex: { anyOf: [{ type: 'number' }, { type: 'null' }] },
-              fragments: {
-                anyOf: [
-                  { type: 'array', items: { type: 'string' } },
-                  { type: 'null' },
-                ],
-              },
-              correctOrder: {
-                anyOf: [
-                  { type: 'array', items: { type: 'string' } },
-                  { type: 'null' },
-                ],
-              },
-            },
+            ],
           },
         },
       },
@@ -135,12 +146,10 @@ export async function generateAiQuizSet({
     'Use only the provided grammar and vocabulary source material.',
     'Mix three question kinds: single_select, cloze_select, and order_select.',
     'Make the style feel like real JLPT drills: concise, high-quality distractors, natural Japanese, and no duplicate questions.',
-    '',
-    'Field rules — follow exactly:',
-    '- kind="cloze_select": sentence is REQUIRED and must contain exactly one blank written as ＿＿＿. Provide exactly 4 choices and a zero-based correctIndex. fragments and correctOrder must be null.',
-    '- kind="single_select": sentence is REQUIRED and must be a complete Japanese example sentence that gives context for the question. Provide exactly 4 choices and a zero-based correctIndex. fragments and correctOrder must be null.',
-    '- kind="order_select": fragments and correctOrder are REQUIRED arrays of the same strings in shuffled vs. correct order. sentence, choices, and correctIndex must be null.',
-    '',
+    'For single_select: sentence must be a complete Japanese example sentence giving context for the question.',
+    'For cloze_select: sentence must contain exactly one blank written as ＿＿＿.',
+    'For single_select and cloze_select: provide exactly 4 choices and a zero-based correctIndex.',
+    'For order_select: provide fragments and correctOrder as arrays of the same strings.',
     `Target duration: ${durationMinutes} minutes.`,
     'Create 12 questions if possible, otherwise create at least 8.',
     `Source material: ${JSON.stringify(trimmedEntries)}`,
