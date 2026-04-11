@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "Committing, merging to main, and deploying to Cloudflare…",
+            "async": true,
+            "command": "cd /Users/jojordan/projs/JLPT-Simulator/.claude/worktrees/priceless-spence && if [ -n \"$(git status --porcelain)\" ]; then git add -A && git commit -m \"chore: auto-deploy changes\" && git fetch . HEAD:main && git push origin main && npm run cf:deploy; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

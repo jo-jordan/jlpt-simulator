@@ -22,9 +22,10 @@ import {
   formatRemainingTime,
   getEntryCounts,
   importEntriesFromFile,
+  normalizeEntry,
   parseLibraryJson,
 } from './lib/content'
-import { createEntryId, defaultLanguage } from './lib/constants'
+import { defaultLanguage } from './lib/constants'
 import { t } from './lib/i18n'
 import { createDefaultOpenAiSettings } from './lib/openai'
 import type {
@@ -136,6 +137,19 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [isRefreshingModels, setIsRefreshingModels] = useState(false)
   const [entryForm, setEntryForm] = useState({
+    type: 'vocabulary' as EntryType,
+    term: '',
+    reading: '',
+    meaning: '',
+    example: '',
+    notes: '',
+  })
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [addEntryOpen, setAddEntryOpen] = useState(false)
+  const [entrySearch, setEntrySearch] = useState('')
+  const [entryTypeFilter, setEntryTypeFilter] = useState<'all' | EntryType>('all')
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState({
     type: 'vocabulary' as EntryType,
     term: '',
     reading: '',
@@ -458,67 +472,60 @@ function App() {
       return
     }
 
-    const nextEntry: StudyEntry = {
-      id: createEntryId(),
-      level: 'N2',
-      section: 'language_knowledge',
-      subsection: entryForm.type,
-      item_type: entryForm.type === 'grammar' ? '文の文法1' : '文脈規定',
-      source_type: 'original',
-      title: null,
-      instructions_ja:
-        entryForm.type === 'grammar'
-          ? '文法として最も適切なものを選んでください。'
-          : '語彙として最も適切なものを選んでください。',
-      instructions_zh:
-        entryForm.type === 'grammar' ? '请选择最合适的语法项目。' : '请选择最合适的词汇项目。',
-      passage: {
-        text: entryForm.example.trim() || null,
-        segments: entryForm.example.trim() ? [entryForm.example.trim()] : [],
-        metadata: {},
+    const nextEntry = normalizeEntry(
+      {
+        type: entryForm.type,
+        term: entryForm.term.trim(),
+        reading: entryForm.reading.trim() || undefined,
+        meaning: entryForm.meaning.trim(),
+        example: entryForm.example.trim() || undefined,
+        notes: entryForm.notes.trim() || undefined,
       },
-      question: {
-        stem: entryForm.term.trim(),
-        blank_positions: [],
-        choices: [],
-        correct_choice_id: null,
-        correct_answers: [],
-        answer_format: 'single_choice',
-      },
-      audio: {
-        audio_id: null,
-        transcript: null,
-        speaker_notes: [],
-        play_limit: 1,
-      },
-      explanation: {
-        ja: entryForm.notes.trim() || null,
-        zh: null,
-        grammar_points: entryForm.type === 'grammar' ? [entryForm.term.trim()] : [],
-        vocab_points: entryForm.type === 'vocabulary' ? [entryForm.term.trim()] : [],
-      },
-      tags: [],
-      difficulty: 'medium',
-      estimated_time_sec: entryForm.type === 'grammar' ? 75 : 45,
-      type: entryForm.type,
-      term: entryForm.term.trim(),
-      reading: entryForm.reading.trim() || undefined,
-      meaning: entryForm.meaning.trim(),
-      example: entryForm.example.trim() || undefined,
-      notes: entryForm.notes.trim() || undefined,
-      sourceTitle: 'Manual Entry',
-    }
+      'Manual Entry',
+    )
+
+    if (!nextEntry) return
 
     patchEntries([nextEntry, ...library.entries])
-    setEntryForm({
-      type: 'vocabulary',
-      term: '',
-      reading: '',
-      meaning: '',
-      example: '',
-      notes: '',
-    })
+    setEntryForm({ type: 'vocabulary', term: '', reading: '', meaning: '', example: '', notes: '' })
     setSavingStatus(tr('addedEntry', { term: nextEntry.term }))
+  }
+
+  function startEditEntry(entry: StudyEntry) {
+    setEditingEntryId(entry.id)
+    setEditForm({
+      type: entry.type,
+      term: entry.term,
+      reading: entry.reading ?? '',
+      meaning: entry.meaning,
+      example: entry.example ?? '',
+      notes: entry.notes ?? '',
+    })
+  }
+
+  function saveEditEntry() {
+    if (!editForm.term.trim() || !editForm.meaning.trim() || !editingEntryId) return
+
+    const existing = library.entries.find((e) => e.id === editingEntryId)
+    if (!existing) return
+
+    const updated = normalizeEntry(
+      {
+        ...existing,
+        type: editForm.type,
+        term: editForm.term.trim(),
+        reading: editForm.reading.trim() || undefined,
+        meaning: editForm.meaning.trim(),
+        example: editForm.example.trim() || undefined,
+        notes: editForm.notes.trim() || undefined,
+      },
+      existing.sourceTitle,
+    )
+
+    if (!updated) return
+
+    patchEntries(library.entries.map((e) => (e.id === editingEntryId ? { ...updated, id: editingEntryId } : e)))
+    setEditingEntryId(null)
   }
 
   function removeEntry(entryId: string) {
@@ -868,6 +875,7 @@ function App() {
           <h1 className="page-title">{tr('homeTitle')}</h1>
         </div>
         <div className="button-row">
+          <button className="ghost-button" onClick={() => setLibraryOpen(true)}>{tr('manageLibrary')}</button>
           <button className="ghost-button" onClick={() => setSettingsOpen(true)}>{tr('settings')}</button>
           <button className="primary-button" onClick={() => startLocalSession(selectedPreset)}>{tr('startMock')}</button>
         </div>
@@ -940,13 +948,13 @@ function App() {
             </div>
           </div>
 
-          <div className="ai-overview">
-            <p>
+          <div className="ai-status-row">
+            <span className="status-chip neutral">
               {tr('model')}: <strong>{openAiSettings.selectedModel}</strong>
-            </p>
-            <p>
+            </span>
+            <span className={`status-chip ${hasStoredApiKey ? 'ok' : 'warn'}`}>
               {tr('apiKey')}: <strong>{hasStoredApiKey ? tr('configured') : tr('missing')}</strong>
-            </p>
+            </span>
           </div>
 
           <p className="status-line">{aiStatus}</p>
@@ -994,23 +1002,36 @@ function App() {
         <article className="panel">
           <div className="panel-head">
             <div>
-              <p className="section-label">{tr('librarySnapshot')}</p>
+              <p className="section-label">{tr('library')}</p>
               <h2>{tr('currentStudyBase')}</h2>
             </div>
-            <button className="ghost-button compact" onClick={() => setSettingsOpen(true)}>{tr('editInSettings')}</button>
+            <button className="ghost-button compact" onClick={() => setLibraryOpen(true)}>{tr('manageLibrary')}</button>
           </div>
 
-          <div className="snapshot-grid">
-            {library.entries.slice(0, 6).map((entry) => (
-              <div key={entry.id} className="snapshot-card">
-                <strong>{entry.term}</strong>
-                  <p>
-                    {entry.type} · {entry.item_type} · {entry.meaning}
-                  </p>
+          <div className="entry-list" style={{ maxHeight: 220 }}>
+            {library.entries.slice(0, 5).map((entry) => (
+              <div key={entry.id} className="entry-card">
+                <div className="entry-card-header">
+                  <span className={`type-badge ${entry.type === 'vocabulary' ? 'vocab' : 'gram'}`}>
+                    {entry.type === 'vocabulary' ? 'V' : 'G'}
+                  </span>
+                  <div className="entry-card-info">
+                    <div className="entry-card-term-row">
+                      <span className="entry-card-term">{entry.term}</span>
+                    </div>
+                    {entry.reading ? <p className="entry-card-reading">{entry.reading}</p> : null}
+                    <p className="entry-card-meaning">{entry.meaning}</p>
+                  </div>
                 </div>
+              </div>
             ))}
+            {library.entries.length > 5 ? (
+              <p className="status-line muted" style={{ textAlign: 'center', paddingTop: 4 }}>
+                +{library.entries.length - 5} more
+              </p>
+            ) : null}
           </div>
-          <p className="status-line muted">{importStatus}</p>
+          <p className="status-line muted" style={{ marginTop: 12 }}>{importStatus}</p>
           {savingStatus ? <p className="status-line muted">{savingStatus}</p> : null}
         </article>
       </section>
@@ -1155,139 +1176,190 @@ function App() {
               </p>
             </section>
 
-            <section className="settings-section">
-              <div className="panel-head">
-                <div>
-                  <p className="section-label">{tr('library')}</p>
-                  <h3>{tr('importSaveExport')}</h3>
+          </aside>
+        </div>
+      ) : null}
+
+      {libraryOpen ? (
+        <div className="settings-backdrop" onClick={() => { setLibraryOpen(false); setEditingEntryId(null); setAddEntryOpen(false) }}>
+          <aside className="settings-panel library-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-head">
+              <div>
+                <p className="section-label">{tr('library')}</p>
+                <h2>{tr('libraryManager')}</h2>
+                <p className="library-stats">
+                  {counts.vocabulary} {tr('vocabulary').toLowerCase()} · {counts.grammar} {tr('grammar').toLowerCase()}
+                  {library.updatedAt ? ` · ${formatDate(library.updatedAt, language)}` : ''}
+                </p>
+              </div>
+              <button className="ghost-button compact" onClick={() => { setLibraryOpen(false); setEditingEntryId(null); setAddEntryOpen(false) }}>{tr('close')}</button>
+            </div>
+
+            <div className="library-actions">
+              <button className="primary-button" onClick={() => setAddEntryOpen((v) => !v)}>
+                {addEntryOpen ? tr('cancel') : `+ ${tr('addNewEntry')}`}
+              </button>
+              <button className="ghost-button" onClick={() => fileInputRef.current?.click()}>{tr('importDocs')}</button>
+              <button className="ghost-button" onClick={exportLibrary}>{tr('exportJson')}</button>
+              <button className="ghost-button" onClick={() => void openJsonFile()}>{tr('openJsonForEditing')}</button>
+              <button className="ghost-button" onClick={() => void saveBackToJson()}>{tr('saveBackToJsonButton')}</button>
+              <span className="action-divider" aria-hidden="true" />
+              <button className="ghost-button danger" onClick={resetToStarter}>{tr('resetStarterDeck')}</button>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              className="hidden-input"
+              type="file"
+              accept=".json,.md,.txt,.docx"
+              multiple
+              onChange={(event) => {
+                void importFiles(event.target.files)
+                event.currentTarget.value = ''
+              }}
+            />
+
+            {addEntryOpen ? (
+              <div className="add-entry-panel">
+                <h4>{tr('addNewEntry')}</h4>
+                <div className="inline-form-grid">
+                  <label>
+                    {tr('type')}
+                    <select value={entryForm.type} onChange={(event) => setEntryForm((c) => ({ ...c, type: event.target.value as EntryType }))}>
+                      <option value="vocabulary">{tr('vocabulary')}</option>
+                      <option value="grammar">{tr('grammar')}</option>
+                    </select>
+                  </label>
+                  <label>
+                    {tr('termOrPattern')}
+                    <input value={entryForm.term} onChange={(event) => setEntryForm((c) => ({ ...c, term: event.target.value }))} placeholder="例: 〜わけではない" />
+                  </label>
+                  <label>
+                    {tr('reading')}
+                    <input value={entryForm.reading} onChange={(event) => setEntryForm((c) => ({ ...c, reading: event.target.value }))} placeholder={tr('optional')} />
+                  </label>
+                  <label>
+                    {tr('meaning')}
+                    <input value={entryForm.meaning} onChange={(event) => setEntryForm((c) => ({ ...c, meaning: event.target.value }))} placeholder={tr('englishMeaning')} />
+                  </label>
+                  <label className="wide">
+                    {tr('exampleSentence')}
+                    <textarea value={entryForm.example} onChange={(event) => setEntryForm((c) => ({ ...c, example: event.target.value }))} />
+                  </label>
+                  <label className="wide">
+                    {tr('notes')}
+                    <textarea value={entryForm.notes} onChange={(event) => setEntryForm((c) => ({ ...c, notes: event.target.value }))} />
+                  </label>
+                </div>
+                <div className="button-row" style={{ marginTop: 12 }}>
+                  <button className="primary-button" onClick={() => { addEntry(); setAddEntryOpen(false) }}>{tr('addEntry')}</button>
                 </div>
               </div>
+            ) : null}
 
-              <div className="button-row">
-                <button className="primary-button" onClick={() => fileInputRef.current?.click()}>{tr('importDocs')}</button>
-                <button className="ghost-button" onClick={() => void openJsonFile()}>{tr('openJsonForEditing')}</button>
-                <button className="ghost-button" onClick={() => void saveBackToJson()}>{tr('saveBackToJsonButton')}</button>
-                <button className="ghost-button" onClick={exportLibrary}>{tr('exportJson')}</button>
-                <button className="ghost-button" onClick={resetToStarter}>{tr('resetStarterDeck')}</button>
-              </div>
+            {importStatus ? <p className="status-line muted" style={{ marginTop: 8 }}>{importStatus}</p> : null}
+            {savingStatus ? <p className="status-line muted">{savingStatus}</p> : null}
 
+            <div className="search-row" style={{ marginTop: 16 }}>
               <input
-                ref={fileInputRef}
-                className="hidden-input"
-                type="file"
-                accept=".json,.md,.txt,.docx"
-                multiple
-                onChange={(event) => {
-                  void importFiles(event.target.files)
-                  event.currentTarget.value = ''
-                }}
+                placeholder={tr('searchEntries')}
+                value={entrySearch}
+                onChange={(event) => setEntrySearch(event.target.value)}
               />
-
-              <p className="status-line">{importStatus}</p>
-              {savingStatus ? <p className="status-line muted">{savingStatus}</p> : null}
-            </section>
-
-            <section className="settings-section">
-              <div className="panel-head">
-                <div>
-                  <p className="section-label">{tr('newEntry')}</p>
-                  <h3>{tr('addContentManually')}</h3>
-                </div>
+              <div className="filter-tabs">
+                <button className={`filter-tab${entryTypeFilter === 'all' ? ' active' : ''}`} onClick={() => setEntryTypeFilter('all')}>{tr('filterAll')}</button>
+                <button className={`filter-tab${entryTypeFilter === 'vocabulary' ? ' active' : ''}`} onClick={() => setEntryTypeFilter('vocabulary')}>V</button>
+                <button className={`filter-tab${entryTypeFilter === 'grammar' ? ' active' : ''}`} onClick={() => setEntryTypeFilter('grammar')}>G</button>
               </div>
+            </div>
 
-              <div className="form-grid">
-                <label>
-                  {tr('type')}
-                  <select
-                    value={entryForm.type}
-                    onChange={(event) =>
-                      setEntryForm((current) => ({
-                        ...current,
-                        type: event.target.value as EntryType,
-                      }))
-                    }
-                  >
-                    <option value="vocabulary">{tr('vocabulary')}</option>
-                    <option value="grammar">{tr('grammar')}</option>
-                  </select>
-                </label>
-                <label>
-                  {tr('termOrPattern')}
-                  <input
-                    value={entryForm.term}
-                    onChange={(event) =>
-                      setEntryForm((current) => ({ ...current, term: event.target.value }))
-                    }
-                    placeholder="例: 〜わけではない"
-                  />
-                </label>
-                <label>
-                  {tr('reading')}
-                  <input
-                    value={entryForm.reading}
-                    onChange={(event) =>
-                      setEntryForm((current) => ({ ...current, reading: event.target.value }))
-                    }
-                    placeholder={tr('optional')}
-                  />
-                </label>
-                <label>
-                  {tr('meaning')}
-                  <input
-                    value={entryForm.meaning}
-                    onChange={(event) =>
-                      setEntryForm((current) => ({ ...current, meaning: event.target.value }))
-                    }
-                    placeholder={tr('englishMeaning')}
-                  />
-                </label>
-                <label className="wide">
-                  {tr('exampleSentence')}
-                  <textarea
-                    value={entryForm.example}
-                    onChange={(event) =>
-                      setEntryForm((current) => ({ ...current, example: event.target.value }))
-                    }
-                  />
-                </label>
-                <label className="wide">
-                  {tr('notes')}
-                  <textarea
-                    value={entryForm.notes}
-                    onChange={(event) =>
-                      setEntryForm((current) => ({ ...current, notes: event.target.value }))
-                    }
-                  />
-                </label>
-              </div>
+            <div className="entry-list">
+              {(() => {
+                const query = entrySearch.toLowerCase()
+                const filtered = library.entries.filter((entry) => {
+                  const matchesType = entryTypeFilter === 'all' || entry.type === entryTypeFilter
+                  const matchesSearch =
+                    !query ||
+                    entry.term.toLowerCase().includes(query) ||
+                    entry.meaning.toLowerCase().includes(query) ||
+                    (entry.reading?.toLowerCase().includes(query) ?? false)
+                  return matchesType && matchesSearch
+                })
 
-              <div className="button-row">
-                <button className="primary-button" onClick={addEntry}>{tr('addEntry')}</button>
-              </div>
-            </section>
-
-            <section className="settings-section">
-              <div className="panel-head">
-                <div>
-                  <p className="section-label">{tr('entries')}</p>
-                  <h3>{tr('currentLibrary')}</h3>
-                </div>
-              </div>
-
-              <div className="entry-table scrollable">
-                {library.entries.map((entry) => (
-                  <div key={entry.id} className="entry-row">
-                    <div>
-                      <strong>{entry.term}</strong>
-                      <p>
-                        {entry.type} · {entry.item_type} · {entry.meaning}
-                      </p>
+                if (!filtered.length) {
+                  return (
+                    <div className="empty-state compact">
+                      <p className="muted">{tr('noMatchingEntries')}</p>
                     </div>
-                    <button className="ghost-button compact" onClick={() => removeEntry(entry.id)}>{tr('remove')}</button>
+                  )
+                }
+
+                return filtered.map((entry) => (
+                  <div key={entry.id} className="entry-card">
+                    <div className="entry-card-header">
+                      <span className={`type-badge ${entry.type === 'vocabulary' ? 'vocab' : 'gram'}`}>
+                        {entry.type === 'vocabulary' ? 'V' : 'G'}
+                      </span>
+                      <div className="entry-card-info">
+                        <div className="entry-card-term-row">
+                          <span className="entry-card-term">{entry.term}</span>
+                        </div>
+                        {entry.reading ? <p className="entry-card-reading">{entry.reading}</p> : null}
+                        <p className="entry-card-meaning">{entry.meaning}</p>
+                        {entry.example ? <p className="entry-card-example">{entry.example}</p> : null}
+                      </div>
+                      <div className="entry-card-actions">
+                        <button
+                          className="ghost-button compact"
+                          onClick={() => editingEntryId === entry.id ? setEditingEntryId(null) : startEditEntry(entry)}
+                        >
+                          {editingEntryId === entry.id ? tr('cancel') : tr('edit')}
+                        </button>
+                        <button className="ghost-button compact danger" onClick={() => removeEntry(entry.id)}>{tr('remove')}</button>
+                      </div>
+                    </div>
+
+                    {editingEntryId === entry.id ? (
+                      <div className="entry-edit-form">
+                        <div className="inline-form-grid">
+                          <label>
+                            {tr('type')}
+                            <select value={editForm.type} onChange={(event) => setEditForm((c) => ({ ...c, type: event.target.value as EntryType }))}>
+                              <option value="vocabulary">{tr('vocabulary')}</option>
+                              <option value="grammar">{tr('grammar')}</option>
+                            </select>
+                          </label>
+                          <label>
+                            {tr('termOrPattern')}
+                            <input value={editForm.term} onChange={(event) => setEditForm((c) => ({ ...c, term: event.target.value }))} />
+                          </label>
+                          <label>
+                            {tr('reading')}
+                            <input value={editForm.reading} onChange={(event) => setEditForm((c) => ({ ...c, reading: event.target.value }))} placeholder={tr('optional')} />
+                          </label>
+                          <label>
+                            {tr('meaning')}
+                            <input value={editForm.meaning} onChange={(event) => setEditForm((c) => ({ ...c, meaning: event.target.value }))} />
+                          </label>
+                          <label className="wide">
+                            {tr('exampleSentence')}
+                            <textarea value={editForm.example} onChange={(event) => setEditForm((c) => ({ ...c, example: event.target.value }))} />
+                          </label>
+                          <label className="wide">
+                            {tr('notes')}
+                            <textarea value={editForm.notes} onChange={(event) => setEditForm((c) => ({ ...c, notes: event.target.value }))} />
+                          </label>
+                        </div>
+                        <div className="button-row" style={{ marginTop: 12 }}>
+                          <button className="primary-button" onClick={saveEditEntry}>{tr('save')}</button>
+                          <button className="ghost-button" onClick={() => setEditingEntryId(null)}>{tr('cancel')}</button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
-                ))}
-              </div>
-            </section>
+                ))
+              })()}
+            </div>
           </aside>
         </div>
       ) : null}

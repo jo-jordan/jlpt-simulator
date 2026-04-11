@@ -127,7 +127,7 @@ function sentenceWithBlank(example: string, term: string) {
   return example.includes(term) ? example.replace(term, '＿＿＿') : `${example} ＿＿＿`
 }
 
-function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEntry | null {
+export function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEntry | null {
   if (!raw.term || !raw.meaning) {
     return null
   }

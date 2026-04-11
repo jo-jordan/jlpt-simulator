@@ -338,6 +338,201 @@ textarea {
   border-top: 1px solid rgba(98, 72, 44, 0.1);
 }
 
+/* ── Library Manager ──────────────────────────────── */
+
+.library-panel {
+  width: min(860px, 100%);
+  height: min(100%, 940px);
+  border-radius: 32px;
+  padding: 24px;
+  overflow: auto;
+}
+
+.library-stats {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 16px 18px;
+  border-radius: 22px;
+  background: rgba(255, 250, 243, 0.82);
+  border: 1px solid rgba(98, 72, 44, 0.12);
+}
+
+.search-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.search-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.filter-tab {
+  padding: 8px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(98, 72, 44, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.875rem;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.filter-tab.active {
+  background: rgba(199, 104, 45, 0.14);
+  border-color: rgba(199, 104, 45, 0.36);
+  color: var(--accent-strong);
+}
+
+.entry-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  max-height: 480px;
+  overflow: auto;
+}
+
+.entry-card {
+  border-radius: 18px;
+  border: 1px solid rgba(98, 72, 44, 0.12);
+  background: rgba(255, 250, 243, 0.88);
+  padding: 14px 16px;
+}
+
+.entry-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.entry-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.entry-card-term {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.entry-card-reading {
+  margin-left: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.entry-card-meaning {
+  margin-top: 2px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.entry-card-example {
+  margin-top: 4px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entry-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  align-items: flex-start;
+}
+
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  letter-spacing: 0;
+}
+
+.type-badge.vocab {
+  background: rgba(199, 104, 45, 0.14);
+  color: var(--accent-strong);
+}
+
+.type-badge.gram {
+  background: rgba(53, 121, 72, 0.12);
+  color: #2d6b45;
+}
+
+.entry-edit-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(98, 72, 44, 0.1);
+}
+
+.inline-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.inline-form-grid label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+
+.inline-form-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.inline-form-grid input,
+.inline-form-grid select,
+.inline-form-grid textarea {
+  padding: 9px 12px;
+  font-size: 0.875rem;
+}
+
+.inline-form-grid textarea {
+  min-height: 72px;
+}
+
+.add-entry-panel {
+  margin-top: 16px;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 250, 243, 0.82);
+  border: 1px solid rgba(98, 72, 44, 0.12);
+}
+
+.add-entry-panel h4 {
+  margin: 0 0 14px;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent-strong);
+}
+
 .session-shell {
   display: grid;
   gap: 24px;
@@ -552,7 +747,6 @@ textarea {
   .topbar,
   .session-header,
   .session-actions,
-  .panel-head,
   .session-nav,
   .session-cta,
   .ai-overview {
@@ -560,7 +754,6 @@ textarea {
     align-items: stretch;
   }
 
-  .hero-stats,
   .score-strip,
   .snapshot-grid,
   .form-grid {
@@ -571,8 +764,150 @@ textarea {
     padding: 0;
   }
 
-  .settings-panel {
+  .settings-panel,
+  .library-panel {
     height: 100svh;
     border-radius: 0;
+  }
+}
+
+/* ── UI Refinements ───────────────────────────────────────────── */
+
+/* 1. Sticky modal headers — prevent close/title from scrolling away */
+.settings-panel > .panel-head,
+.library-panel > .panel-head {
+  position: sticky;
+  top: -24px; /* offset panel's own padding */
+  z-index: 2;
+  background: rgba(253, 249, 243, 0.97);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(98, 72, 44, 0.1);
+  /* bleed to panel edges */
+  margin: -24px -24px 0;
+  padding: 18px 24px 14px;
+  border-radius: 32px 32px 0 0;
+}
+
+/* 2. Keep panel-head as row inside modals — never let it go to column */
+.settings-panel .panel-head,
+.library-panel .panel-head {
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+/* 3. Danger button — for destructive actions (Remove, Reset) */
+.ghost-button.danger {
+  color: #a83225;
+  border-color: rgba(168, 50, 37, 0.2);
+}
+.ghost-button.danger:hover {
+  background: rgba(168, 50, 37, 0.08);
+  border-color: rgba(168, 50, 37, 0.32);
+}
+
+/* 4. Hero stats — stay 3-col at all widths, more compact */
+.hero-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.stat-card {
+  padding: 14px 16px;
+}
+.stat-card span {
+  font-size: 1.75rem;
+}
+
+/* 5. Preset buttons — stack label above timing, cleaner hierarchy */
+.preset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+.preset strong {
+  font-size: 0.95rem;
+}
+.preset span {
+  font-size: 0.8rem;
+}
+
+/* 6. Session CTA — tighter, button stays compact not full-width */
+.session-cta {
+  gap: 16px;
+}
+.session-cta .primary-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 7. AI Studio — status chips instead of plain text paragraphs */
+.ai-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.status-chip.ok {
+  background: rgba(53, 121, 72, 0.1);
+  border-color: rgba(53, 121, 72, 0.2);
+  color: #2d6b45;
+}
+.status-chip.warn {
+  background: rgba(168, 50, 37, 0.08);
+  border-color: rgba(168, 50, 37, 0.18);
+  color: #a83225;
+}
+.status-chip.neutral {
+  background: rgba(98, 72, 44, 0.08);
+  border-color: rgba(98, 72, 44, 0.16);
+  color: var(--muted);
+}
+
+/* 8. Library action bar — add a visual divider before destructive action */
+.library-actions {
+  align-items: center;
+}
+.library-actions .action-divider {
+  width: 1px;
+  height: 22px;
+  background: rgba(98, 72, 44, 0.18);
+  flex-shrink: 0;
+}
+
+/* 9. Entry cards — reading appears below term on its own line */
+.entry-card-term-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.entry-card-reading {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-left: 0; /* was 6px on the same line */
+}
+
+/* 10. Panel header add-entry-panel — tighter top spacing since header is sticky */
+.add-entry-panel {
+  margin-top: 14px;
+}
+
+/* 11. Topbar — slightly tighter on mobile so heading fits better */
+@media (max-width: 720px) {
+  .topbar {
+    gap: 16px;
+  }
+  .page-title {
+    font-size: clamp(2rem, 8vw, 3.4rem);
   }
 }
