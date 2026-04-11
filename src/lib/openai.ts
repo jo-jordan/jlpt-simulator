@@ -135,11 +135,14 @@ export async function generateAiQuizSet({
     'Use only the provided grammar and vocabulary source material.',
     'Mix three question kinds: single_select, cloze_select, and order_select.',
     'Make the style feel like real JLPT drills: concise, high-quality distractors, natural Japanese, and no duplicate questions.',
-    'For cloze_select, sentence must include one blank shown as ＿＿＿.',
-    'For order_select, provide fragments and correctOrder as arrays of the same strings.',
-    'For single_select and cloze_select, provide exactly 4 choices and a zero-based correctIndex.',
+    '',
+    'Field rules — follow exactly:',
+    '- kind="cloze_select": sentence is REQUIRED and must contain exactly one blank written as ＿＿＿. Provide exactly 4 choices and a zero-based correctIndex. fragments and correctOrder must be null.',
+    '- kind="single_select": sentence is REQUIRED and must be a complete Japanese example sentence that gives context for the question. Provide exactly 4 choices and a zero-based correctIndex. fragments and correctOrder must be null.',
+    '- kind="order_select": fragments and correctOrder are REQUIRED arrays of the same strings in shuffled vs. correct order. sentence, choices, and correctIndex must be null.',
+    '',
     `Target duration: ${durationMinutes} minutes.`,
-    `Create 12 questions if possible, otherwise create at least 8.`,
+    'Create 12 questions if possible, otherwise create at least 8.',
     `Source material: ${JSON.stringify(trimmedEntries)}`,
   ].join('\n')
 
