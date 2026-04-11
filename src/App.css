@@ -911,3 +911,36 @@ textarea {
     font-size: clamp(2rem, 8vw, 3.4rem);
   }
 }
+
+/* AI entry gate — progress pips */
+.ai-entry-gate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.ai-entry-pips {
+  display: flex;
+  gap: 5px;
+}
+
+.ai-pip {
+  flex: 1;
+  max-width: 36px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(98, 72, 44, 0.12);
+  transition: background 0.25s ease;
+}
+
+.ai-pip.filled {
+  background: var(--accent);
+}
+
+.ai-entry-hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0;
+  letter-spacing: 0.01em;
+}

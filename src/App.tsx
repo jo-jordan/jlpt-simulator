@@ -957,9 +957,22 @@ function App() {
             </span>
           </div>
 
-          <p className="status-line">{aiStatus}</p>
+          {library.entries.length < 6 ? (
+            <div className="ai-entry-gate">
+              <div className="ai-entry-pips">
+                {Array.from({ length: 6 }, (_, i) => (
+                  <span key={i} className={`ai-pip${i < library.entries.length ? ' filled' : ''}`} />
+                ))}
+              </div>
+              <p className="ai-entry-hint">
+                {tr('aiProgressHint', { current: library.entries.length, remaining: 6 - library.entries.length })}
+              </p>
+            </div>
+          ) : (
+            <p className="status-line">{aiStatus}</p>
+          )}
           <div className="button-row">
-            <button className="primary-button" disabled={isGenerating} onClick={() => void generateQuizWithAi()}>
+            <button className="primary-button" disabled={isGenerating || library.entries.length < 6} onClick={() => void generateQuizWithAi()}>
               {isGenerating ? tr('generating') : tr('generateAiQuiz')}
             </button>
             <button className="ghost-button" onClick={() => setSettingsOpen(true)}>{tr('openAiSettings')}</button>
