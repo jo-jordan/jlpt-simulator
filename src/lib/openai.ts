@@ -45,11 +45,10 @@ function makeQuizSchema() {
         durationMinutes: { type: 'number' },
         questions: {
           type: 'array',
-          minItems: 6,
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['kind', 'section', 'prompt', 'explanation'],
+            required: ['kind', 'section', 'prompt', 'explanation', 'sentence', 'choices', 'correctIndex', 'fragments', 'correctOrder'],
             properties: {
               kind: {
                 type: 'string',
@@ -61,19 +60,25 @@ function makeQuizSchema() {
               },
               prompt: { type: 'string' },
               explanation: { type: 'string' },
-              sentence: { type: 'string' },
+              sentence: { anyOf: [{ type: 'string' }, { type: 'null' }] },
               choices: {
-                type: 'array',
-                items: { type: 'string' },
+                anyOf: [
+                  { type: 'array', items: { type: 'string' } },
+                  { type: 'null' },
+                ],
               },
-              correctIndex: { type: 'number' },
+              correctIndex: { anyOf: [{ type: 'number' }, { type: 'null' }] },
               fragments: {
-                type: 'array',
-                items: { type: 'string' },
+                anyOf: [
+                  { type: 'array', items: { type: 'string' } },
+                  { type: 'null' },
+                ],
               },
               correctOrder: {
-                type: 'array',
-                items: { type: 'string' },
+                anyOf: [
+                  { type: 'array', items: { type: 'string' } },
+                  { type: 'null' },
+                ],
               },
             },
           },
@@ -203,11 +208,11 @@ export async function generateAiQuizSet({
       return {
         ...base,
         kind: 'cloze_select',
-        sentence: String(question.sentence || ''),
+        sentence: question.sentence ? String(question.sentence) : '',
         choices: Array.isArray(question.choices)
           ? question.choices.map((item) => String(item))
           : [],
-        correctIndex: Number(question.correctIndex || 0),
+        correctIndex: question.correctIndex != null ? Number(question.correctIndex) : 0,
       }
     }
 
@@ -217,7 +222,7 @@ export async function generateAiQuizSet({
       choices: Array.isArray(question.choices)
         ? question.choices.map((item) => String(item))
         : [],
-      correctIndex: Number(question.correctIndex || 0),
+      correctIndex: question.correctIndex != null ? Number(question.correctIndex) : 0,
     }
   })
 
