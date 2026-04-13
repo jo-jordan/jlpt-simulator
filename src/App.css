@@ -28,6 +28,7 @@
 .button-row {
   flex-wrap: wrap;
   justify-content: flex-start;
+  row-gap: 10px;
 }
 
 .topbar-copy {
@@ -68,6 +69,8 @@
 }
 
 .hero-panel {
+  display: grid;
+  gap: 20px;
   padding: 32px;
 }
 
@@ -151,6 +154,9 @@
 }
 
 .panel {
+  display: grid;
+  align-content: start;
+  gap: 18px;
   padding: 24px;
 }
 
@@ -279,7 +285,6 @@ textarea {
 
 .session-cta,
 .ai-overview {
-  margin-top: 18px;
   padding: 18px;
   border-radius: 22px;
   background: rgba(255, 250, 243, 0.82);
@@ -334,6 +339,9 @@ textarea {
   width: min(760px, 100%);
   height: min(100%, 940px);
   border-radius: 32px;
+  display: grid;
+  align-content: start;
+  gap: 24px;
   padding: 24px;
   overflow: auto;
 }
@@ -369,6 +377,19 @@ textarea {
   color: var(--ink);
 }
 
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: rgba(199, 104, 45, 0.4);
+  box-shadow: 0 0 0 4px rgba(199, 104, 45, 0.12);
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(199, 104, 45, 0.14);
+}
+
 textarea {
   min-height: 96px;
   resize: vertical;
@@ -390,10 +411,20 @@ textarea {
 .entry-row {
   padding: 14px 0;
   border-top: 1px solid rgba(98, 72, 44, 0.1);
+  align-items: flex-start;
+}
+
+.entry-row > div,
+.saved-card > div,
+.snapshot-card,
+.session-cta > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
 }
 
 .inline-actions {
-  margin-bottom: 18px;
+  margin-bottom: 0;
 }
 
 .session-shell {
@@ -466,6 +497,9 @@ textarea {
 }
 
 .exam-stage {
+  display: grid;
+  align-content: start;
+  gap: 20px;
   padding: 30px;
   min-height: calc(100svh - 180px);
 }
@@ -478,7 +512,6 @@ textarea {
 }
 
 .exam-prompt {
-  margin: 18px 0 28px;
   font-size: clamp(1.6rem, 3vw, 2.3rem);
   line-height: 1.35;
   color: var(--ink);
@@ -512,7 +545,6 @@ textarea {
 }
 
 .sentence-card {
-  margin-bottom: 18px;
   font-size: 1.15rem;
   line-height: 1.8;
 }
@@ -569,9 +601,22 @@ textarea {
 }
 
 .question-prompt.small {
-  margin: 6px 0 10px;
   font-size: 1rem;
   color: var(--ink);
+}
+
+.panel-head {
+  align-items: flex-start;
+}
+
+.panel-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.status-line {
+  line-height: 1.5;
 }
 
 .empty-state {

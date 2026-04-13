@@ -1,5 +1,13 @@
 import { createEntryId, createQuizSetId, defaultLanguage, defaultOpenAiModels } from './constants'
-import type { EntryType, JlptSection, OpenAiSettings, QuizQuestion, QuizSet, StudyEntry } from '../types'
+import type {
+  EntryType,
+  JlptSection,
+  LanguageCode,
+  OpenAiSettings,
+  QuizQuestion,
+  QuizSet,
+  StudyEntry,
+} from '../types'
 
 const OPENAI_API_BASE = 'https://api.openai.com/v1'
 const vocabularyItemTypes = ['漢字読み', '表記', '語形成', '文脈規定', '言い換え類義', '用法'] as const
@@ -24,6 +32,18 @@ type OpenAiResponse = {
 
 type RawAiQuestion = Record<string, unknown>
 type RawEntryDetails = Record<string, unknown>
+
+function outputLanguageLabel(language: LanguageCode) {
+  if (language === 'zh-CN') {
+    return 'Simplified Chinese'
+  }
+
+  if (language === 'ja') {
+    return 'Japanese'
+  }
+
+  return 'English'
+}
 
 function extractOutputText(data: OpenAiResponse) {
   if (typeof data.output_text === 'string' && data.output_text.trim()) {
@@ -399,11 +419,13 @@ export async function generateAiQuizSet({
   model,
   entries,
   durationMinutes,
+  language,
 }: {
   apiKey: string
   model: string
   entries: StudyEntry[]
   durationMinutes: number
+  language: LanguageCode
 }): Promise<QuizSet> {
   const trimmedEntries = entries.slice(0, 80).map((entry) => ({
     id: entry.id,
@@ -422,6 +444,8 @@ export async function generateAiQuizSet({
     'Generate a realistic JLPT N2 language knowledge quiz set.',
     'Use only the provided source material. Do not invent grammar points or vocabulary outside the input.',
     'Match the real JLPT N2 forms instead of generic quiz styles.',
+    `Write title, prompt, and explanation in ${outputLanguageLabel(language)}.`,
+    'Keep sentence, choices, fragments, correctOrder, and quoted target expressions in natural Japanese because the tested material is JLPT Japanese.',
     'Use these mappings strictly:',
     '- 漢字読み, 表記, 語形成, 言い換え類義, 用法, 文の文法1 => kind=single_select',
     '- 文脈規定, 文の文法2 => kind=cloze_select',
@@ -490,18 +514,20 @@ export async function generateAiEntryDetails({
   model,
   type,
   term,
+  language,
 }: {
   apiKey: string
   model: string
   type: EntryType
   term: string
+  language: LanguageCode
 }) {
   const instructions = [
     'Generate supporting study-card details for a single JLPT N2 entry.',
     'Do not add furigana formatting, markdown, numbering, or commentary outside the schema.',
-    'Return a concise English meaning.',
+    `Return a concise ${outputLanguageLabel(language)} meaning.`,
     'Return one natural Japanese example sentence that clearly uses the term or pattern.',
-    'Return a short English usage note in notes when helpful; otherwise null.',
+    `Return a short ${outputLanguageLabel(language)} usage note in notes when helpful; otherwise null.`,
     'For vocabulary, return reading in kana when applicable.',
     'For grammar, reading should usually be null unless a kana reading is genuinely useful.',
     'Choose an itemType that fits the term and the selected entry type.',

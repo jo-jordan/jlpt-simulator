@@ -1,4 +1,4 @@
-import type { OpenAiSettings, QuizSet, StudyLibrary } from '../types'
+import type { LanguageCode, OpenAiSettings, QuizSet, StudyLibrary } from '../types'
 
 export interface ApiSessionUser {
   id: string
@@ -89,7 +89,7 @@ export function saveRemoteLibrary(token: string, library: StudyLibrary) {
 
 export function generateRemoteEntry(
   token: string,
-  payload: { type: 'vocabulary' | 'grammar'; term: string },
+  payload: { type: 'vocabulary' | 'grammar'; term: string; language: LanguageCode },
 ) {
   return apiRequest<{ entryId: string; library: StudyLibrary }>('/api/library/entries/ai', {
     method: 'POST',
@@ -100,7 +100,7 @@ export function generateRemoteEntry(
 
 export function generateRemoteQuiz(
   token: string,
-  payload: { durationMinutes: number; label: string },
+  payload: { durationMinutes: number; label: string; language: LanguageCode },
 ) {
   return apiRequest<{ quizSet: QuizSet; library: StudyLibrary }>('/api/quiz/generate', {
     method: 'POST',

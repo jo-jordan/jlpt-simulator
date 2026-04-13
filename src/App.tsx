@@ -535,6 +535,7 @@ function App() {
       const { library: nextLibrary } = await generateRemoteEntry(userSession.token, {
         type: entryForm.type,
         term,
+        language: openAiSettings.language,
       })
 
       setLibrary(nextLibrary)
@@ -611,6 +612,7 @@ function App() {
       const { quizSet, library: nextLibrary } = await generateRemoteQuiz(userSession.token, {
         durationMinutes: selectedPreset.durationMinutes,
         label: `${presetLabel(selectedPreset)} · ${tr('aiGeneratedSet')}`,
+        language: openAiSettings.language,
       })
       setLibrary(nextLibrary)
       setAiStatus(tr('generatedQuizNamed', { title: quizSet.title }))

@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { createEntryId } from '../src/lib/constants'
 import { defaultLanguage, defaultOpenAiModels } from '../src/lib/constants'
 import { fetchOpenAiModels, generateAiEntryDetails, generateAiQuizSet } from '../src/lib/openai'
-import type { EntryType, OpenAiSettings, StudyEntry, StudyLibrary } from '../src/types'
+import type { EntryType, LanguageCode, OpenAiSettings, StudyEntry, StudyLibrary } from '../src/types'
 import type { Env } from './env'
 import { decryptText, encryptText, hashPassword, signToken, verifyPassword, verifyToken } from './lib/crypto'
 import {
@@ -108,12 +108,14 @@ async function enrichEntryInBackground({
   entry,
   apiKey,
   model,
+  language,
 }: {
   db: D1Database
   userId: string
   entry: StudyEntry
   apiKey: string
   model: string
+  language: LanguageCode
 }) {
   try {
     const details = await generateAiEntryDetails({
@@ -121,6 +123,7 @@ async function enrichEntryInBackground({
       model,
       type: entry.type,
       term: entry.term,
+      language,
     })
     const completedAt = new Date().toISOString()
     const nextEntry: StudyEntry = {
@@ -141,7 +144,8 @@ async function enrichEntryInBackground({
       },
       explanation: {
         ...entry.explanation,
-        ja: details.notes ?? null,
+        ja: language === 'ja' ? details.notes ?? null : entry.explanation.ja,
+        zh: language === 'zh-CN' ? details.notes ?? null : entry.explanation.zh,
       },
     }
 
@@ -336,7 +340,7 @@ app.put('/api/library', async (c) => {
 
 app.post('/api/library/entries/ai', async (c) => {
   try {
-    const body = await c.req.json<{ type?: EntryType; term?: string }>()
+    const body = await c.req.json<{ type?: EntryType; term?: string; language?: LanguageCode }>()
     const type = body.type === 'grammar' ? 'grammar' : 'vocabulary'
     const term = body.term?.trim()
 
@@ -345,7 +349,7 @@ app.post('/api/library/entries/ai', async (c) => {
     }
 
     const settings = await c.env.DB.prepare(
-      'SELECT openai_key_ciphertext, openai_model FROM user_settings WHERE user_id = ?',
+      'SELECT openai_key_ciphertext, openai_model, language FROM user_settings WHERE user_id = ?',
     )
       .bind(c.get('userId'))
       .first<UserSettingsRow>()
@@ -355,6 +359,7 @@ app.post('/api/library/entries/ai', async (c) => {
     }
 
     const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
+    const language = body.language || (settings.language as LanguageCode) || defaultLanguage
     const pendingEntry = buildPendingEntry(type, term)
     const library = await prependLibraryEntry(c.env.DB, c.get('userId'), pendingEntry)
 
@@ -365,6 +370,7 @@ app.post('/api/library/entries/ai', async (c) => {
         entry: pendingEntry,
         apiKey,
         model: settings.openai_model || defaultOpenAiModels[0],
+        language,
       }),
     )
 
@@ -379,9 +385,9 @@ app.post('/api/library/entries/ai', async (c) => {
 
 app.post('/api/quiz/generate', async (c) => {
   try {
-    const body = await c.req.json<{ durationMinutes?: number; label?: string }>()
+    const body = await c.req.json<{ durationMinutes?: number; label?: string; language?: LanguageCode }>()
     const settings = await c.env.DB.prepare(
-      'SELECT openai_key_ciphertext, openai_model FROM user_settings WHERE user_id = ?',
+      'SELECT openai_key_ciphertext, openai_model, language FROM user_settings WHERE user_id = ?',
     )
       .bind(c.get('userId'))
       .first<UserSettingsRow>()
@@ -393,11 +399,13 @@ app.post('/api/quiz/generate', async (c) => {
     const library = await loadUserLibrary(c.env.DB, c.get('userId'))
     const readyEntries = library.entries.filter((entry) => !entry.status && entry.meaning.trim().length > 0)
     const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
+    const language = body.language || (settings.language as LanguageCode) || defaultLanguage
     const quizSet = await generateAiQuizSet({
       apiKey,
       model: settings.openai_model || defaultOpenAiModels[0],
       entries: readyEntries,
       durationMinutes: body.durationMinutes ?? 45,
+      language,
     })
 
     if (body.label?.trim()) {
