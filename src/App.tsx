@@ -350,6 +350,62 @@ function App() {
     return question.itemType || questionKindLabel(question.kind)
   }
 
+  function resolveQuestionTargetExpression(question: QuizQuestion) {
+    if (question.targetExpression?.trim()) {
+      return question.targetExpression.trim()
+    }
+
+    if (!question.sourceEntryId) {
+      return ''
+    }
+
+    return library.entries.find((entry) => entry.id === question.sourceEntryId)?.term ?? ''
+  }
+
+  function questionPromptText(question: QuizQuestion) {
+    const targetExpression = resolveQuestionTargetExpression(question)
+
+    if (question.itemType === '漢字読み' && targetExpression) {
+      return tr('chooseReading', { term: targetExpression })
+    }
+
+    if (question.itemType === '表記' && targetExpression) {
+      return tr('chooseSpelling', { term: targetExpression })
+    }
+
+    if (question.itemType === '語形成' && targetExpression) {
+      return tr('chooseWordFormation', { term: targetExpression })
+    }
+
+    if (question.itemType === '言い換え類義' && targetExpression) {
+      return question.section === 'grammar'
+        ? tr('chooseClosestMeaningGrammar', { term: targetExpression })
+        : tr('chooseClosestMeaningVocabulary', { term: targetExpression })
+    }
+
+    if (question.itemType === '用法' && targetExpression) {
+      return tr('chooseUsage', { term: targetExpression })
+    }
+
+    if (question.kind === 'order_select') {
+      return tr('arrangeFragments')
+    }
+
+    if (question.kind === 'cloze_select') {
+      return question.section === 'grammar' ? tr('chooseGrammarSentence') : tr('chooseWordSentence')
+    }
+
+    if (question.section === 'grammar' && targetExpression) {
+      return tr('chooseClosestMeaningGrammar', { term: targetExpression })
+    }
+
+    if (question.section === 'vocabulary' && targetExpression) {
+      return tr('chooseClosestMeaningVocabulary', { term: targetExpression })
+    }
+
+    return question.section === 'grammar' ? tr('chooseGrammarSentence') : tr('chooseWordSentence')
+  }
+
   function formatQuestionAnswer(question: QuizQuestion, answer: SessionAnswer | undefined) {
     if (question.kind === 'order_select') {
       return Array.isArray(answer) && answer.length ? answer.join(' ') : tr('notAnswered')
@@ -376,7 +432,7 @@ function App() {
       <article key={`${question.id}-${questionNumber}-${tone}`} className={tone === 'good' ? 'result-card good' : 'result-card bad'}>
         <p className="result-index">{tr('questionLabel', { number: questionNumber })}</p>
         {question.itemType ? <p className="muted">{question.itemType}</p> : null}
-        <p className="question-prompt small">{question.prompt}</p>
+        <p className="question-prompt small">{questionPromptText(question)}</p>
         {question.kind !== 'order_select' && 'sentence' in question && question.sentence ? (
           <p className="muted">{question.sentence}</p>
         ) : null}
@@ -1172,7 +1228,7 @@ function App() {
                 <span>{questionFormLabel(activeQuestion)}</span>
               </div>
 
-              <p className="exam-prompt">{activeQuestion.prompt}</p>
+              <p className="exam-prompt">{questionPromptText(activeQuestion)}</p>
 
               {activeQuestion.kind === 'single_select' && activeQuestion.sentence ? (
                 <div className="sentence-card">{activeQuestion.sentence}</div>

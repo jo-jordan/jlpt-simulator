@@ -136,7 +136,7 @@ function buildEntryLookup(entries: StudyEntry[]) {
 }
 
 function resolveQuestionEntry(
-  question: Pick<QuizQuestion, 'sourceEntryId' | 'prompt'>,
+  question: Pick<QuizQuestion, 'sourceEntryId' | 'targetExpression'>,
   entryLookup?: ReturnType<typeof buildEntryLookup>,
 ) {
   if (!entryLookup) {
@@ -147,7 +147,7 @@ function resolveQuestionEntry(
     return entryLookup.byId.get(question.sourceEntryId)
   }
 
-  const quotedTarget = extractQuotedTarget(question.prompt)
+  const quotedTarget = question.targetExpression?.trim() || ''
 
   if (!quotedTarget) {
     return undefined
@@ -314,7 +314,8 @@ function normalizeQuestion(
   raw: Record<string, unknown>,
   entryLookup?: ReturnType<typeof buildEntryLookup>,
 ): QuizQuestion | null {
-  const prompt = typeof raw.prompt === 'string' ? raw.prompt.trim() : ''
+  const legacyPrompt = typeof raw.prompt === 'string' ? raw.prompt.trim() : ''
+  const rawTargetExpression = typeof raw.targetExpression === 'string' ? raw.targetExpression.trim() : ''
   const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
   const sourceEntryId = typeof raw.sourceEntryId === 'string' ? raw.sourceEntryId.trim() : undefined
   const section = raw.section === 'grammar' || raw.section === 'vocabulary' ? raw.section : 'mixed'
@@ -325,9 +326,13 @@ function normalizeQuestion(
       : undefined
   const kind = raw.kind
 
-  if (!prompt || !explanation) {
+  if (!explanation) {
     return null
   }
+
+  const sourceEntry =
+    sourceEntryId && entryLookup?.byId.has(sourceEntryId) ? entryLookup.byId.get(sourceEntryId) : undefined
+  const targetExpression = rawTargetExpression || sourceEntry?.term || extractQuotedTarget(legacyPrompt)
 
   if (kind === 'single_select') {
     const sentence = typeof raw.sentence === 'string' ? raw.sentence.trim() : ''
@@ -338,16 +343,16 @@ function normalizeQuestion(
       return null
     }
 
-    if (containsExactChoiceText(prompt, choices[correctIndex]) || (sentence && containsExactChoiceText(sentence, choices[correctIndex]))) {
+    if ((targetExpression && containsExactChoiceText(targetExpression, choices[correctIndex])) || (sentence && containsExactChoiceText(sentence, choices[correctIndex]))) {
       return null
     }
 
     const question: SingleSelectQuestion = {
       id: typeof raw.id === 'string' ? raw.id : createEntryId(),
       ...(sourceEntryId ? { sourceEntryId } : {}),
+      ...(targetExpression ? { targetExpression } : {}),
       kind: 'single_select',
       section,
-      prompt,
       itemType,
       jlptSection,
       ...(sentence ? { sentence } : {}),
@@ -356,9 +361,9 @@ function normalizeQuestion(
       explanation,
     }
 
-    const sourceEntry = resolveQuestionEntry(question, entryLookup)
-    const sourceReading = sourceEntry?.reading ? normalizeComparableText(sourceEntry.reading) : ''
-    const grammarTarget = sourceEntry?.term || extractQuotedTarget(prompt)
+    const resolvedEntry = resolveQuestionEntry(question, entryLookup)
+    const sourceReading = resolvedEntry?.reading ? normalizeComparableText(resolvedEntry.reading) : ''
+    const grammarTarget = resolvedEntry?.term || targetExpression
     const isGrammarChoiceQuestion = section === 'grammar' || itemType === '文の文法1' || itemType === '文の文法2'
 
     if (
@@ -386,19 +391,16 @@ function normalizeQuestion(
       return null
     }
 
-    if (
-      containsExactChoiceText(prompt, choices[correctIndex]) ||
-      containsExactChoiceText(sentence.replace(/＿+/gu, ''), choices[correctIndex])
-    ) {
+    if (containsExactChoiceText(sentence.replace(/＿+/gu, ''), choices[correctIndex])) {
       return null
     }
 
     const question: ClozeSelectQuestion = {
       id: typeof raw.id === 'string' ? raw.id : createEntryId(),
       ...(sourceEntryId ? { sourceEntryId } : {}),
+      ...(targetExpression ? { targetExpression } : {}),
       kind: 'cloze_select',
       section,
-      prompt,
       itemType,
       jlptSection,
       sentence,
@@ -407,8 +409,8 @@ function normalizeQuestion(
       explanation,
     }
 
-    const sourceEntry = resolveQuestionEntry(question, entryLookup)
-    const grammarTarget = sourceEntry?.term || extractQuotedTarget(prompt)
+    const resolvedEntry = resolveQuestionEntry(question, entryLookup)
+    const grammarTarget = resolvedEntry?.term || targetExpression
     const isGrammarChoiceQuestion = section === 'grammar' || itemType === '文の文法1' || itemType === '文の文法2'
 
     if (isGrammarChoiceQuestion && grammarTarget && hasObviousGrammarChoiceLeak(grammarTarget, choices, correctIndex)) {
@@ -433,9 +435,9 @@ function normalizeQuestion(
     const question: OrderSelectQuestion = {
       id: typeof raw.id === 'string' ? raw.id : createEntryId(),
       ...(sourceEntryId ? { sourceEntryId } : {}),
+      ...(targetExpression ? { targetExpression } : {}),
       kind: 'order_select',
       section,
-      prompt,
       itemType,
       jlptSection,
       fragments,

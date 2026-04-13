@@ -80,8 +80,8 @@ export interface StudyEntry {
 export interface QuizQuestionBase {
   id: string
   sourceEntryId?: string
+  targetExpression?: string
   section: EntryType | 'mixed'
-  prompt: string
   explanation: string
   itemType?: string
   jlptSection?: JlptSection

@@ -187,10 +187,6 @@ function extractQuotedTarget(prompt: string) {
   return match?.[1]?.trim() || ''
 }
 
-function hasSpecificSingleSelectPrompt(prompt: string) {
-  return /[「『][^「」『』]+[」』]/u.test(prompt)
-}
-
 function shuffleArray<T>(items: T[]) {
   const next = [...items]
 
@@ -205,7 +201,7 @@ function shuffleArray<T>(items: T[]) {
 function buildQuestionSignature(question: QuizQuestion) {
   const sentence = 'sentence' in question && question.sentence ? question.sentence : ''
   return normalizeComparableText(
-    [question.kind, question.itemType ?? '', question.prompt, sentence].join('|'),
+    [question.kind, question.itemType ?? '', question.targetExpression ?? '', sentence].join('|'),
   )
 }
 
@@ -275,7 +271,7 @@ function finalizeAiQuestions(rawQuestions: Array<Record<string, unknown>>, sourc
 function resolveSourceEntry(
   sourceEntries: SourceEntryMap,
   sourceEntryId: string,
-  prompt: string,
+  fallbackTarget = '',
 ) {
   const direct = sourceEntries.get(sourceEntryId)
 
@@ -283,7 +279,7 @@ function resolveSourceEntry(
     return direct
   }
 
-  const quotedTarget = extractQuotedTarget(prompt)
+  const quotedTarget = fallbackTarget || ''
 
   if (!quotedTarget) {
     return undefined
@@ -293,7 +289,7 @@ function resolveSourceEntry(
 }
 
 function normalizeAiQuestion(question: RawAiQuestion, sourceEntries: SourceEntryMap): QuizQuestion | null {
-  const prompt = typeof question.prompt === 'string' ? question.prompt.trim() : ''
+  const legacyPrompt = typeof question.prompt === 'string' ? question.prompt.trim() : ''
   const explanation = typeof question.explanation === 'string' ? question.explanation.trim() : ''
   const sourceEntryId = typeof question.sourceEntryId === 'string' ? question.sourceEntryId.trim() : ''
   const section: EntryType | 'mixed' =
@@ -309,17 +305,18 @@ function normalizeAiQuestion(question: RawAiQuestion, sourceEntries: SourceEntry
       ? question.jlptSection
       : 'language_knowledge'
 
-  if (!prompt || !explanation || !itemType || !sourceEntryId) {
+  if (!explanation || !itemType || !sourceEntryId) {
     return null
   }
 
-  const sourceEntry = resolveSourceEntry(sourceEntries, sourceEntryId, prompt)
+  const targetExpression = sourceEntries.get(sourceEntryId)?.term || extractQuotedTarget(legacyPrompt)
+  const sourceEntry = resolveSourceEntry(sourceEntries, sourceEntryId, targetExpression)
 
   const base = {
     id: createEntryId(),
     sourceEntryId,
+    ...(targetExpression ? { targetExpression } : {}),
     section,
-    prompt,
     explanation,
     itemType,
     jlptSection,
@@ -361,7 +358,7 @@ function normalizeAiQuestion(question: RawAiQuestion, sourceEntries: SourceEntry
 
   const correctChoice = choices[correctIndex]
   const sourceReading = sourceEntry?.reading ? normalizeComparableText(sourceEntry.reading) : ''
-  const grammarTarget = sourceEntry?.term || extractQuotedTarget(prompt)
+  const grammarTarget = sourceEntry?.term || targetExpression
   const isGrammarChoiceQuestion = section === 'grammar' || itemType === '文の文法1' || itemType === '文の文法2'
 
   if (isGrammarChoiceQuestion && grammarTarget && hasObviousGrammarChoiceLeak(grammarTarget, choices, correctIndex)) {
@@ -376,10 +373,7 @@ function normalizeAiQuestion(question: RawAiQuestion, sourceEntries: SourceEntry
       return null
     }
 
-    if (
-      containsExactChoiceText(prompt, correctChoice) ||
-      containsExactChoiceText(sentence.replace(/＿+/gu, ''), correctChoice)
-    ) {
+    if (containsExactChoiceText(sentence.replace(/＿+/gu, ''), correctChoice)) {
       return null
     }
 
@@ -394,11 +388,11 @@ function normalizeAiQuestion(question: RawAiQuestion, sourceEntries: SourceEntry
 
   const sentence = normalizeSentence(question.sentence)
 
-  if (!sentence && !hasSpecificSingleSelectPrompt(prompt)) {
+  if (!sentence && !targetExpression) {
     return null
   }
 
-  if (containsExactChoiceText(prompt, correctChoice) || (sentence && containsExactChoiceText(sentence, correctChoice))) {
+  if ((targetExpression && containsExactChoiceText(targetExpression, correctChoice)) || (sentence && containsExactChoiceText(sentence, correctChoice))) {
     return null
   }
 
@@ -441,7 +435,6 @@ function makeQuizSchema() {
               'jlptSection',
               'sourceEntryId',
               'itemType',
-              'prompt',
               'explanation',
               'sentence',
               'choices',
@@ -467,7 +460,6 @@ function makeQuizSchema() {
                 type: 'string',
                 enum: [...allowedItemTypes],
               },
-              prompt: { type: 'string' },
               explanation: { type: 'string' },
               sentence: { type: ['string', 'null'] },
               choices: {
@@ -688,7 +680,7 @@ export async function generateAiQuizSet({
     'Use only the provided source material. Do not invent grammar points or vocabulary outside the input.',
     `Match the real JLPT ${targetLevel} forms and difficulty instead of generic quiz styles.`,
     'When multiple valid quiz sets are possible, vary the selected source entries, item-type order, and final question order instead of repeating the same pattern every time.',
-    'Write every quiz field in natural Japanese, including title, prompt, explanation, sentence, choices, fragments, correctOrder, and quoted target expressions.',
+    'Write every quiz field in natural Japanese, including title, explanation, sentence, choices, fragments, and correctOrder.',
     'Do not output English or Chinese in any quiz field.',
     'Use these mappings strictly:',
     '- 漢字読み, 表記, 語形成, 言い換え類義, 用法, 文の文法1 => kind=single_select',
@@ -697,20 +689,20 @@ export async function generateAiQuizSet({
     'Every question object must include every schema key. Use null for fields that do not apply.',
     'Every question must include sourceEntryId set to the id of the source_material entry it is based on.',
     'Use each sourceEntryId at most once in a generated set unless there is clearly not enough material.',
-    'For single_select, the question must be answerable from the output alone. Include a natural Japanese sentence in sentence, or explicitly name the target word or grammar pattern in prompt like 「食べかけ」.',
+    'Do not include a prompt field in any question object.',
+    'For single_select, the question must be answerable from the output alone. Include a natural Japanese sentence in sentence, or rely on sourceEntryId for direct target-expression questions like meaning or reading.',
     'For cloze_select, include exactly one blank shown as ＿＿＿ in sentence.',
     'For single_select and cloze_select, provide exactly 4 choices and a zero-based correctIndex.',
-    'Do not use generic prompts like 「文の意味に最も合うものを選んでください」 unless the prompt also names the target expression.',
-    'For single_select, the correct choice must be a paraphrase, definition, or interpretation, not the same surface form as the target expression shown in prompt or sentence.',
-    'Do not place the exact correct choice text verbatim in prompt or sentence for single_select.',
+    'For single_select, the correct choice must be a paraphrase, definition, or interpretation, not the same surface form as the target expression shown by sourceEntryId or sentence.',
+    'Do not place the exact correct choice text verbatim in sentence for single_select.',
     'For 文の文法1 and 文の文法2, distractors must be plausible competing grammar forms for the same sentence slot. Do not use random fragments, isolated endings, or obviously unrelated words.',
-    'If a grammar prompt names a target pattern like 「ざるを得ない」, do not make the correct choice the only option that visibly reuses that pattern.',
+    'If a grammar target pattern like 「ざるを得ない」 is identified by sourceEntryId, do not make the correct choice the only option that visibly reuses that pattern.',
     'For 言い換え類義, choices must be semantic paraphrases or near-synonyms in Japanese. Never use the target reading, kana transcription, pronunciation guide, or spelling-only variant as any choice.',
-    'For cloze_select, the correct choice must only fit the blank and must not already appear elsewhere in prompt or sentence.',
+    'For cloze_select, the correct choice must only fit the blank and must not already appear elsewhere in sentence.',
     'For order_select, fragments and correctOrder must contain the same strings in different order.',
     'For single_select and cloze_select, set fragments=null and correctOrder=null.',
     'For cloze_select, sentence must be a string and choices/correctIndex must be non-null.',
-    'For single_select, choices/correctIndex must be non-null. sentence may be null only if prompt names the target expression explicitly.',
+    'For single_select, choices/correctIndex must be non-null. sentence may be null only when sourceEntryId clearly identifies the target expression.',
     'For order_select, set sentence=null, choices=null, and correctIndex=null.',
     `Keep Japanese natural, concise, and close to real JLPT ${targetLevel} wording.`,
     'Avoid duplicate stems, duplicate answers, and obvious distractors.',
