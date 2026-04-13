@@ -16,6 +16,9 @@ const grammarItemTypes = ['文の文法1', '文の文法2', '文章の文法'] a
 const allowedItemTypes = [...vocabularyItemTypes, ...grammarItemTypes] as const
 const targetQuestionCount = 12
 const minimumQuestionCount = 8
+const sourceMaterialLimit = 80
+const recentQuizWindow = 6
+const recentSourcePenalty = 3
 
 type OpenAiResponse = {
   output_text?: string
@@ -135,6 +138,87 @@ function extractQuotedTarget(prompt: string) {
 
 function hasSpecificSingleSelectPrompt(prompt: string) {
   return /[「『][^「」『』]+[」』]/u.test(prompt)
+}
+
+function shuffleArray<T>(items: T[]) {
+  const next = [...items]
+
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[next[index], next[swapIndex]] = [next[swapIndex], next[index]]
+  }
+
+  return next
+}
+
+function buildQuestionSignature(question: QuizQuestion) {
+  const sentence = 'sentence' in question && question.sentence ? question.sentence : ''
+  return normalizeComparableText(
+    [question.kind, question.itemType ?? '', question.prompt, sentence].join('|'),
+  )
+}
+
+function collectRecentSourceEntryIds(quizSets: QuizSet[]) {
+  return quizSets
+    .slice(0, recentQuizWindow)
+    .flatMap((quizSet) => quizSet.questions)
+    .map((question) => question.sourceEntryId?.trim())
+    .filter((sourceEntryId): sourceEntryId is string => Boolean(sourceEntryId))
+}
+
+function pickSourceMaterial(entries: StudyEntry[], recentQuizSets: QuizSet[]) {
+  const recentSourceEntryIds = collectRecentSourceEntryIds(quizSetsToRecentFirst(recentQuizSets))
+  const usageCounts = new Map<string, number>()
+
+  recentSourceEntryIds.forEach((entryId) => {
+    usageCounts.set(entryId, (usageCounts.get(entryId) ?? 0) + 1)
+  })
+
+  return shuffleArray(entries)
+    .sort((left, right) => {
+      const leftPenalty = Math.min(usageCounts.get(left.id) ?? 0, recentSourcePenalty)
+      const rightPenalty = Math.min(usageCounts.get(right.id) ?? 0, recentSourcePenalty)
+      return leftPenalty - rightPenalty
+    })
+    .slice(0, Math.min(sourceMaterialLimit, entries.length))
+}
+
+function quizSetsToRecentFirst(quizSets: QuizSet[]) {
+  return [...quizSets].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+}
+
+function finalizeAiQuestions(rawQuestions: Array<Record<string, unknown>>, sourceEntries: SourceEntryMap) {
+  const seenSourceEntryIds = new Set<string>()
+  const seenSignatures = new Set<string>()
+  const questions: QuizQuestion[] = []
+
+  rawQuestions.forEach((question) => {
+    const normalized = normalizeAiQuestion(question, sourceEntries)
+
+    if (!normalized) {
+      return
+    }
+
+    const signature = buildQuestionSignature(normalized)
+
+    if (!signature || seenSignatures.has(signature)) {
+      return
+    }
+
+    if (normalized.sourceEntryId && seenSourceEntryIds.has(normalized.sourceEntryId)) {
+      return
+    }
+
+    seenSignatures.add(signature)
+
+    if (normalized.sourceEntryId) {
+      seenSourceEntryIds.add(normalized.sourceEntryId)
+    }
+
+    questions.push(normalized)
+  })
+
+  return shuffleArray(questions)
 }
 
 function resolveSourceEntry(
@@ -508,16 +592,19 @@ export async function generateAiQuizSet({
   model,
   entries,
   durationMinutes,
+  recentQuizSets = [],
   targetLevel,
 }: {
   apiKey: string
   model: string
   entries: StudyEntry[]
   durationMinutes: number
+  recentQuizSets?: QuizSet[]
   targetLevel: JlptLevel
 }): Promise<QuizSet> {
+  const selectedEntries = pickSourceMaterial(entries, recentQuizSets)
   const sourceEntries = new Map(
-    entries.map((entry) => [
+    selectedEntries.map((entry) => [
       entry.id,
       {
         id: entry.id,
@@ -526,7 +613,7 @@ export async function generateAiQuizSet({
       },
     ]),
   )
-  const trimmedEntries = entries.slice(0, 80).map((entry) => ({
+  const trimmedEntries = selectedEntries.map((entry) => ({
     id: entry.id,
     section: entry.section,
     subsection: entry.subsection,
@@ -543,6 +630,7 @@ export async function generateAiQuizSet({
     `Generate a realistic JLPT ${targetLevel} language knowledge quiz set.`,
     'Use only the provided source material. Do not invent grammar points or vocabulary outside the input.',
     `Match the real JLPT ${targetLevel} forms and difficulty instead of generic quiz styles.`,
+    'When multiple valid quiz sets are possible, vary the selected source entries, item-type order, and final question order instead of repeating the same pattern every time.',
     'Write every quiz field in natural Japanese, including title, prompt, explanation, sentence, choices, fragments, correctOrder, and quoted target expressions.',
     'Do not output English or Chinese in any quiz field.',
     'Use these mappings strictly:',
@@ -551,6 +639,7 @@ export async function generateAiQuizSet({
     '- 文章の文法 => kind=order_select',
     'Every question object must include every schema key. Use null for fields that do not apply.',
     'Every question must include sourceEntryId set to the id of the source_material entry it is based on.',
+    'Use each sourceEntryId at most once in a generated set unless there is clearly not enough material.',
     'For single_select, the question must be answerable from the output alone. Include a natural Japanese sentence in sentence, or explicitly name the target word or grammar pattern in prompt like 「食べかけ」.',
     'For cloze_select, include exactly one blank shown as ＿＿＿ in sentence.',
     'For single_select and cloze_select, provide exactly 4 choices and a zero-based correctIndex.',
@@ -572,8 +661,12 @@ export async function generateAiQuizSet({
   const input = JSON.stringify({
     target_level: targetLevel,
     target_duration_minutes: durationMinutes,
+    variation_seed: createEntryId(),
     question_count_target: targetQuestionCount,
     minimum_question_count: minimumQuestionCount,
+    recent_source_entry_ids_to_avoid_when_possible: collectRecentSourceEntryIds(
+      quizSetsToRecentFirst(recentQuizSets),
+    ),
     source_material: trimmedEntries,
     item_type_distribution_hint: {
       vocabulary: [...vocabularyItemTypes],
@@ -593,9 +686,7 @@ export async function generateAiQuizSet({
     schema: makeQuizSchema(),
   })
 
-  const questions: QuizQuestion[] = parsed.questions
-    .map((question) => normalizeAiQuestion(question, sourceEntries))
-    .filter((question): question is QuizQuestion => Boolean(question))
+  const questions = finalizeAiQuestions(parsed.questions, sourceEntries)
 
   const quizSet: QuizSet = {
     id: createQuizSetId(),

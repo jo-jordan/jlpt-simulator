@@ -502,6 +502,7 @@ app.post('/api/quiz/generate', async (c) => {
       model: settings.openai_model || defaultOpenAiModels[0],
       entries: readyEntries,
       durationMinutes: body.durationMinutes ?? 45,
+      recentQuizSets: library.quizSets,
       targetLevel,
     })
 
