@@ -72,6 +72,57 @@ function containsExactChoiceText(haystack: string, choice: string) {
   return normalizeComparableText(haystack).includes(normalizedChoice)
 }
 
+function longestCommonSubstringLength(left: string, right: string) {
+  const normalizedLeft = normalizeComparableText(left)
+  const normalizedRight = normalizeComparableText(right)
+
+  if (!normalizedLeft || !normalizedRight) {
+    return 0
+  }
+
+  const dp = new Array(normalizedRight.length + 1).fill(0)
+  let maxLength = 0
+
+  for (let leftIndex = 1; leftIndex <= normalizedLeft.length; leftIndex += 1) {
+    let previous = 0
+
+    for (let rightIndex = 1; rightIndex <= normalizedRight.length; rightIndex += 1) {
+      const current = dp[rightIndex]
+
+      if (normalizedLeft[leftIndex - 1] === normalizedRight[rightIndex - 1]) {
+        dp[rightIndex] = previous + 1
+        maxLength = Math.max(maxLength, dp[rightIndex])
+      } else {
+        dp[rightIndex] = 0
+      }
+
+      previous = current
+    }
+  }
+
+  return maxLength
+}
+
+function hasObviousGrammarChoiceLeak(target: string, choices: string[], correctIndex: number) {
+  const normalizedTarget = normalizeComparableText(target)
+
+  if (normalizedTarget.length < 4) {
+    return false
+  }
+
+  const overlapScores = choices.map((choice) => longestCommonSubstringLength(normalizedTarget, choice) / normalizedTarget.length)
+  const correctOverlap = overlapScores[correctIndex] ?? 0
+  const strongestDistractorOverlap = overlapScores.reduce((max, score, index) => {
+    if (index === correctIndex) {
+      return max
+    }
+
+    return Math.max(max, score)
+  }, 0)
+
+  return correctOverlap >= 0.6 && strongestDistractorOverlap < 0.4
+}
+
 function extractQuotedTarget(prompt: string) {
   const match = prompt.match(/[「『]([^「」『』]+)[」』]/u)
   return match?.[1]?.trim() || ''
@@ -307,12 +358,18 @@ function normalizeQuestion(
 
     const sourceEntry = resolveQuestionEntry(question, entryLookup)
     const sourceReading = sourceEntry?.reading ? normalizeComparableText(sourceEntry.reading) : ''
+    const grammarTarget = sourceEntry?.term || extractQuotedTarget(prompt)
+    const isGrammarChoiceQuestion = section === 'grammar' || itemType === '文の文法1' || itemType === '文の文法2'
 
     if (
       itemType === '言い換え類義' &&
       sourceReading &&
       choices.some((choice) => normalizeComparableText(choice) === sourceReading)
     ) {
+      return null
+    }
+
+    if (isGrammarChoiceQuestion && grammarTarget && hasObviousGrammarChoiceLeak(grammarTarget, choices, correctIndex)) {
       return null
     }
 
@@ -349,6 +406,15 @@ function normalizeQuestion(
       correctIndex,
       explanation,
     }
+
+    const sourceEntry = resolveQuestionEntry(question, entryLookup)
+    const grammarTarget = sourceEntry?.term || extractQuotedTarget(prompt)
+    const isGrammarChoiceQuestion = section === 'grammar' || itemType === '文の文法1' || itemType === '文の文法2'
+
+    if (isGrammarChoiceQuestion && grammarTarget && hasObviousGrammarChoiceLeak(grammarTarget, choices, correctIndex)) {
+      return null
+    }
+
     return question
   }
 

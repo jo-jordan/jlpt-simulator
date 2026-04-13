@@ -131,6 +131,57 @@ function containsExactChoiceText(haystack: string, choice: string) {
   return normalizeComparableText(haystack).includes(normalizedChoice)
 }
 
+function longestCommonSubstringLength(left: string, right: string) {
+  const normalizedLeft = normalizeComparableText(left)
+  const normalizedRight = normalizeComparableText(right)
+
+  if (!normalizedLeft || !normalizedRight) {
+    return 0
+  }
+
+  const dp = new Array(normalizedRight.length + 1).fill(0)
+  let maxLength = 0
+
+  for (let leftIndex = 1; leftIndex <= normalizedLeft.length; leftIndex += 1) {
+    let previous = 0
+
+    for (let rightIndex = 1; rightIndex <= normalizedRight.length; rightIndex += 1) {
+      const current = dp[rightIndex]
+
+      if (normalizedLeft[leftIndex - 1] === normalizedRight[rightIndex - 1]) {
+        dp[rightIndex] = previous + 1
+        maxLength = Math.max(maxLength, dp[rightIndex])
+      } else {
+        dp[rightIndex] = 0
+      }
+
+      previous = current
+    }
+  }
+
+  return maxLength
+}
+
+function hasObviousGrammarChoiceLeak(target: string, choices: string[], correctIndex: number) {
+  const normalizedTarget = normalizeComparableText(target)
+
+  if (normalizedTarget.length < 4) {
+    return false
+  }
+
+  const overlapScores = choices.map((choice) => longestCommonSubstringLength(normalizedTarget, choice) / normalizedTarget.length)
+  const correctOverlap = overlapScores[correctIndex] ?? 0
+  const strongestDistractorOverlap = overlapScores.reduce((max, score, index) => {
+    if (index === correctIndex) {
+      return max
+    }
+
+    return Math.max(max, score)
+  }, 0)
+
+  return correctOverlap >= 0.6 && strongestDistractorOverlap < 0.4
+}
+
 function extractQuotedTarget(prompt: string) {
   const match = prompt.match(/[「『]([^「」『』]+)[」』]/u)
   return match?.[1]?.trim() || ''
@@ -310,6 +361,12 @@ function normalizeAiQuestion(question: RawAiQuestion, sourceEntries: SourceEntry
 
   const correctChoice = choices[correctIndex]
   const sourceReading = sourceEntry?.reading ? normalizeComparableText(sourceEntry.reading) : ''
+  const grammarTarget = sourceEntry?.term || extractQuotedTarget(prompt)
+  const isGrammarChoiceQuestion = section === 'grammar' || itemType === '文の文法1' || itemType === '文の文法2'
+
+  if (isGrammarChoiceQuestion && grammarTarget && hasObviousGrammarChoiceLeak(grammarTarget, choices, correctIndex)) {
+    return null
+  }
 
   if (expectedKind === 'cloze_select') {
     const sentence = normalizeSentence(question.sentence)
@@ -646,6 +703,8 @@ export async function generateAiQuizSet({
     'Do not use generic prompts like 「文の意味に最も合うものを選んでください」 unless the prompt also names the target expression.',
     'For single_select, the correct choice must be a paraphrase, definition, or interpretation, not the same surface form as the target expression shown in prompt or sentence.',
     'Do not place the exact correct choice text verbatim in prompt or sentence for single_select.',
+    'For 文の文法1 and 文の文法2, distractors must be plausible competing grammar forms for the same sentence slot. Do not use random fragments, isolated endings, or obviously unrelated words.',
+    'If a grammar prompt names a target pattern like 「ざるを得ない」, do not make the correct choice the only option that visibly reuses that pattern.',
     'For 言い換え類義, choices must be semantic paraphrases or near-synonyms in Japanese. Never use the target reading, kana transcription, pronunciation guide, or spelling-only variant as any choice.',
     'For cloze_select, the correct choice must only fit the blank and must not already appear elsewhere in prompt or sentence.',
     'For order_select, fragments and correctOrder must contain the same strings in different order.',
