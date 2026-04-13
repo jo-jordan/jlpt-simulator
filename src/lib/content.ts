@@ -2,7 +2,6 @@ import type {
   ClozeSelectQuestion,
   EntryType,
   ExamPreset,
-  LanguageCode,
   JlptAnswerFormat,
   JlptSection,
   JlptSourceType,
@@ -16,7 +15,6 @@ import type {
   StudyLibrary,
 } from '../types'
 import { createEntryId, createQuizSetId } from './constants'
-import { t } from './i18n'
 
 export const STORAGE_KEY = 'jlpt-simulator-library'
 export const SETTINGS_KEY = 'jlpt-simulator-openai-settings'
@@ -108,27 +106,10 @@ export const examPresets: ExamPreset[] = [
   },
 ]
 
-function shuffle<T>(items: T[]) {
-  const copy = [...items]
+function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEntry | null {
+  const status = raw.status === 'pending' || raw.status === 'failed' ? raw.status : undefined
 
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1))
-    ;[copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]]
-  }
-
-  return copy
-}
-
-function pickOtherEntries(entries: StudyEntry[], currentId: string, amount: number) {
-  return shuffle(entries.filter((entry) => entry.id !== currentId)).slice(0, amount)
-}
-
-function sentenceWithBlank(example: string, term: string) {
-  return example.includes(term) ? example.replace(term, '＿＿＿') : `${example} ＿＿＿`
-}
-
-export function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEntry | null {
-  if (!raw.term || !raw.meaning) {
+  if (!raw.term || (!status && !raw.meaning?.trim())) {
     return null
   }
 
@@ -176,11 +157,15 @@ export function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): 
     estimated_time_sec: raw.estimated_time_sec ?? defaults.estimated_time_sec,
     type,
     term: raw.term.trim(),
-    meaning: raw.meaning.trim(),
+    meaning: raw.meaning?.trim() || '',
     reading: raw.reading?.trim() || undefined,
     example: raw.example?.trim() || undefined,
     notes: raw.notes?.trim() || undefined,
     sourceTitle: raw.sourceTitle ?? sourceTitle,
+    status,
+    generationError: raw.generationError?.trim() || undefined,
+    requestedAt: raw.requestedAt,
+    completedAt: raw.completedAt,
   }
 }
 
@@ -188,6 +173,11 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
   const prompt = typeof raw.prompt === 'string' ? raw.prompt.trim() : ''
   const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
   const section = raw.section === 'grammar' || raw.section === 'vocabulary' ? raw.section : 'mixed'
+  const itemType = typeof raw.itemType === 'string' ? raw.itemType.trim() : undefined
+  const jlptSection =
+    raw.jlptSection === 'language_knowledge' || raw.jlptSection === 'reading' || raw.jlptSection === 'listening'
+      ? raw.jlptSection
+      : undefined
   const kind = raw.kind
 
   if (!prompt || !explanation) {
@@ -195,6 +185,7 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
   }
 
   if (kind === 'single_select') {
+    const sentence = typeof raw.sentence === 'string' ? raw.sentence.trim() : ''
     const choices = Array.isArray(raw.choices) ? raw.choices.filter((item): item is string => typeof item === 'string') : []
     const correctIndex = typeof raw.correctIndex === 'number' ? raw.correctIndex : -1
 
@@ -207,6 +198,9 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
       kind: 'single_select',
       section,
       prompt,
+      itemType,
+      jlptSection,
+      ...(sentence ? { sentence } : {}),
       choices,
       correctIndex,
       explanation,
@@ -228,6 +222,8 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
       kind: 'cloze_select',
       section,
       prompt,
+      itemType,
+      jlptSection,
       sentence,
       choices,
       correctIndex,
@@ -253,6 +249,8 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
       kind: 'order_select',
       section,
       prompt,
+      itemType,
+      jlptSection,
       fragments,
       correctOrder,
       explanation,
@@ -264,6 +262,10 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
 }
 
 function normalizeQuizSet(raw: Record<string, unknown>): QuizSet | null {
+  if (raw.source === 'local') {
+    return null
+  }
+
   const questions = Array.isArray(raw.questions)
     ? raw.questions
         .map((question) => normalizeQuestion(question as Record<string, unknown>))
@@ -277,12 +279,16 @@ function normalizeQuizSet(raw: Record<string, unknown>): QuizSet | null {
   return {
     id: typeof raw.id === 'string' ? raw.id : createQuizSetId(),
     title: typeof raw.title === 'string' ? raw.title : 'Generated Quiz Set',
-    source: raw.source === 'local' ? 'local' : 'ai',
+    source: 'ai',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
     durationMinutes: typeof raw.durationMinutes === 'number' ? raw.durationMinutes : 45,
     model: typeof raw.model === 'string' ? raw.model : undefined,
     questions,
   }
+}
+
+function aiQuizSetsOnly(quizSets: QuizSet[]) {
+  return quizSets.filter((quizSet) => quizSet.source === 'ai')
 }
 
 function parsePipeSeparated(text: string, sourceTitle: string) {
@@ -357,6 +363,20 @@ export function createLibrary(
     level: 'N2',
     updatedAt: new Date().toISOString(),
     entries,
+    quizSets: aiQuizSetsOnly(quizSets),
+  }
+}
+
+export function sanitizeLibrary(library: StudyLibrary): StudyLibrary {
+  const quizSets = aiQuizSetsOnly(library.quizSets)
+
+  if (quizSets.length === library.quizSets.length) {
+    return library
+  }
+
+  return {
+    ...library,
+    updatedAt: new Date().toISOString(),
     quizSets,
   }
 }
@@ -410,150 +430,6 @@ export async function importEntriesFromFile(file: File) {
   return parsePipeSeparated(await file.text(), sourceTitle)
 }
 
-function ensureChoices(correct: string, distractors: string[]) {
-  const unique = Array.from(new Set([correct, ...distractors].filter(Boolean)))
-
-  while (unique.length < 4) {
-    unique.push(`Option ${unique.length + 1}`)
-  }
-
-  return shuffle(unique.slice(0, 4))
-}
-
-function buildSingleSelect(
-  entry: StudyEntry,
-  pool: StudyEntry[],
-  language: LanguageCode,
-): SingleSelectQuestion {
-  const choices = ensureChoices(
-    entry.meaning,
-    pickOtherEntries(pool, entry.id, 3).map((item) => item.meaning),
-  )
-
-  return {
-    id: createEntryId(),
-    kind: 'single_select',
-    section: entry.type,
-    prompt:
-      entry.type === 'grammar'
-        ? t(language, 'chooseClosestMeaningGrammar', { term: entry.term })
-        : t(language, 'chooseClosestMeaningVocabulary', { term: entry.term }),
-    itemType: entry.item_type,
-    jlptSection: entry.section,
-    choices,
-    correctIndex: choices.indexOf(entry.meaning),
-    explanation: `${entry.term}: ${entry.meaning}`,
-  }
-}
-
-function buildCloze(
-  entry: StudyEntry,
-  pool: StudyEntry[],
-  language: LanguageCode,
-): ClozeSelectQuestion {
-  const answer = entry.type === 'grammar' ? entry.term : entry.term
-  const choices = ensureChoices(
-    answer,
-    pickOtherEntries(pool, entry.id, 3).map((item) => item.term),
-  )
-
-  return {
-    id: createEntryId(),
-    kind: 'cloze_select',
-    section: entry.type,
-    prompt:
-      entry.type === 'grammar'
-        ? t(language, 'chooseGrammarSentence')
-        : t(language, 'chooseWordSentence'),
-    itemType: entry.item_type,
-    jlptSection: entry.section,
-    sentence: sentenceWithBlank(
-      entry.example || `${entry.term} can be used in this position.`,
-      answer,
-    ),
-    choices,
-    correctIndex: choices.indexOf(answer),
-    explanation: `${entry.term}: ${entry.meaning}`,
-  }
-}
-
-function buildOrder(entry: StudyEntry, language: LanguageCode): OrderSelectQuestion {
-  const source = entry.example || `${entry.term} は N2 で重要です。`
-  const fragments = source
-    .split(/(?<=[、。])/)
-    .map((fragment) => fragment.trim())
-    .filter(Boolean)
-
-  const correctOrder =
-    fragments.length >= 2
-      ? fragments
-      : [`${entry.term} は`, `${entry.meaning} を`, '表す。']
-
-  return {
-    id: createEntryId(),
-    kind: 'order_select',
-    section: entry.type,
-    prompt: t(language, 'arrangeFragments'),
-    itemType: entry.item_type,
-    jlptSection: entry.section,
-    fragments: shuffle(correctOrder),
-    correctOrder,
-    explanation: entry.example || `${entry.term}: ${entry.meaning}`,
-  }
-}
-
-function buildQuestionForEntry(
-  entry: StudyEntry,
-  pool: StudyEntry[],
-  language: LanguageCode,
-): QuizQuestion {
-  if (entry.example) {
-    const roll = Math.random()
-
-    if (roll > 0.68) {
-      return buildOrder(entry, language)
-    }
-
-    if (roll > 0.32) {
-      return buildCloze(entry, pool, language)
-    }
-  }
-
-  return buildSingleSelect(entry, pool, language)
-}
-
-export function buildLocalQuizSet(
-  library: StudyLibrary,
-  preset: ExamPreset,
-  language: LanguageCode,
-): QuizSet {
-  const vocabularyPool = shuffle(library.entries.filter((entry) => entry.type === 'vocabulary'))
-  const grammarPool = shuffle(library.entries.filter((entry) => entry.type === 'grammar'))
-  const pickedEntries = [
-    ...vocabularyPool.slice(0, Math.min(preset.vocabularyCount, vocabularyPool.length)),
-    ...grammarPool.slice(0, Math.min(preset.grammarCount, grammarPool.length)),
-  ]
-
-  const questions = shuffle(
-    pickedEntries.map((entry) =>
-      buildQuestionForEntry(
-        entry,
-        entry.type === 'vocabulary' ? vocabularyPool : grammarPool,
-        language,
-      ),
-    ),
-  )
-
-  return {
-    id: createQuizSetId(),
-    title: t(language, 'localQuizTitle', { label: preset.label }),
-    source: 'local',
-    createdAt: new Date().toISOString(),
-    durationMinutes: preset.durationMinutes,
-    questions,
-  }
-}
-
 export function formatRemainingTime(ms: number) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000))
   const minutes = Math.floor(totalSeconds / 60)
@@ -570,6 +446,14 @@ export function getEntryCounts(entries: StudyEntry[]) {
     },
     { vocabulary: 0, grammar: 0 },
   )
+}
+
+export function isEntryReady(entry: StudyEntry) {
+  return !entry.status && entry.term.trim().length > 0 && entry.meaning.trim().length > 0
+}
+
+export function countReadyEntries(entries: StudyEntry[]) {
+  return entries.filter((entry) => isEntryReady(entry)).length
 }
 
 export function isQuestionCorrect(question: QuizQuestion, answer: SessionAnswer | undefined) {
@@ -589,7 +473,7 @@ export function countCorrectAnswers(quizSet: QuizSet, answers: Record<string, Se
 }
 
 export function upsertQuizSet(library: StudyLibrary, quizSet: QuizSet): StudyLibrary {
-  const nextQuizSets = [quizSet, ...library.quizSets.filter((item) => item.id !== quizSet.id)]
+  const nextQuizSets = [quizSet, ...aiQuizSetsOnly(library.quizSets).filter((item) => item.id !== quizSet.id)]
 
   return {
     ...library,

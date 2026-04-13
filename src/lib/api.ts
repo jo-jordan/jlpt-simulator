@@ -87,6 +87,17 @@ export function saveRemoteLibrary(token: string, library: StudyLibrary) {
   return apiRequest<StudyLibrary>('/api/library', { method: 'PUT', token, body: library })
 }
 
+export function generateRemoteEntry(
+  token: string,
+  payload: { type: 'vocabulary' | 'grammar'; term: string },
+) {
+  return apiRequest<{ entryId: string; library: StudyLibrary }>('/api/library/entries/ai', {
+    method: 'POST',
+    token,
+    body: payload,
+  })
+}
+
 export function generateRemoteQuiz(
   token: string,
   payload: { durationMinutes: number; label: string },

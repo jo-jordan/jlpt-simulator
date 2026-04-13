@@ -1,10 +1,17 @@
 import { Hono } from 'hono'
-import { starterLibrary } from '../src/data/starterLibrary'
+import { createEntryId } from '../src/lib/constants'
 import { defaultLanguage, defaultOpenAiModels } from '../src/lib/constants'
-import { fetchOpenAiModels, generateAiQuizSet } from '../src/lib/openai'
-import type { OpenAiSettings, StudyLibrary } from '../src/types'
+import { fetchOpenAiModels, generateAiEntryDetails, generateAiQuizSet } from '../src/lib/openai'
+import type { EntryType, OpenAiSettings, StudyEntry, StudyLibrary } from '../src/types'
 import type { Env } from './env'
 import { decryptText, encryptText, hashPassword, signToken, verifyPassword, verifyToken } from './lib/crypto'
+import {
+  loadUserLibrary,
+  prependLibraryEntry,
+  replaceLibraryEntryIfPresent,
+  replaceUserLibrary,
+  seedStarterLibrary,
+} from './lib/library-store'
 
 type Variables = {
   userId: string
@@ -39,6 +46,117 @@ function createSessionToken(secret: string, userId: string, email: string) {
     email,
     exp: Date.now() + 1000 * 60 * 60 * 24 * 30,
   })
+}
+
+function buildPendingEntry(type: EntryType, term: string): StudyEntry {
+  const requestedAt = new Date().toISOString()
+
+  return {
+    id: createEntryId(),
+    level: 'N2',
+    section: 'language_knowledge',
+    subsection: type,
+    item_type: type === 'grammar' ? '文の文法1' : '文脈規定',
+    source_type: 'original',
+    title: null,
+    instructions_ja:
+      type === 'grammar'
+        ? '文法として最も適切なものを選んでください。'
+        : '語彙として最も適切なものを選んでください。',
+    instructions_zh:
+      type === 'grammar' ? '请选择最合适的语法项目。' : '请选择最合适的词汇项目。',
+    passage: {
+      text: null,
+      segments: [],
+      metadata: {},
+    },
+    question: {
+      stem: term,
+      blank_positions: [],
+      choices: [],
+      correct_choice_id: null,
+      correct_answers: [],
+      answer_format: 'single_choice',
+    },
+    audio: {
+      audio_id: null,
+      transcript: null,
+      speaker_notes: [],
+      play_limit: 1,
+    },
+    explanation: {
+      ja: null,
+      zh: null,
+      grammar_points: type === 'grammar' ? [term] : [],
+      vocab_points: type === 'vocabulary' ? [term] : [],
+    },
+    tags: [],
+    difficulty: 'medium',
+    estimated_time_sec: type === 'grammar' ? 75 : 45,
+    type,
+    term,
+    meaning: '',
+    sourceTitle: 'AI Draft',
+    status: 'pending',
+    requestedAt,
+  }
+}
+
+async function enrichEntryInBackground({
+  db,
+  userId,
+  entry,
+  apiKey,
+  model,
+}: {
+  db: D1Database
+  userId: string
+  entry: StudyEntry
+  apiKey: string
+  model: string
+}) {
+  try {
+    const details = await generateAiEntryDetails({
+      apiKey,
+      model,
+      type: entry.type,
+      term: entry.term,
+    })
+    const completedAt = new Date().toISOString()
+    const nextEntry: StudyEntry = {
+      ...entry,
+      item_type: details.itemType,
+      reading: details.reading ?? undefined,
+      meaning: details.meaning,
+      example: details.example,
+      notes: details.notes ?? undefined,
+      sourceTitle: 'AI Enriched Entry',
+      status: undefined,
+      generationError: undefined,
+      completedAt,
+      passage: {
+        text: details.example,
+        segments: [details.example],
+        metadata: {},
+      },
+      explanation: {
+        ...entry.explanation,
+        ja: details.notes ?? null,
+      },
+    }
+
+    await replaceLibraryEntryIfPresent(db, userId, nextEntry, { updatedAt: completedAt })
+  } catch (error) {
+    const failedAt = new Date().toISOString()
+    const nextEntry: StudyEntry = {
+      ...entry,
+      status: 'failed',
+      generationError: error instanceof Error ? error.message : 'AI entry generation failed.',
+      completedAt: failedAt,
+    }
+
+    await replaceLibraryEntryIfPresent(db, userId, nextEntry, { updatedAt: failedAt })
+  }
 }
 
 app.use('/api/*', async (c, next) => {
@@ -92,9 +210,7 @@ app.post('/api/auth/register', async (c) => {
   )
     .bind(userId, null, defaultOpenAiModels[0], defaultLanguage, createdAt)
     .run()
-  await c.env.DB.prepare('INSERT INTO user_libraries (user_id, library_json, updated_at) VALUES (?, ?, ?)')
-    .bind(userId, JSON.stringify(starterLibrary), createdAt)
-    .run()
+  await seedStarterLibrary(c.env.DB, userId, createdAt)
 
   const token = await createSessionToken(c.env.APP_SECRET, userId, email)
   return c.json({ token, user: { id: userId, email } }, 201)
@@ -210,52 +326,77 @@ app.post('/api/settings/models/refresh', async (c) => {
 })
 
 app.get('/api/library', async (c) => {
-  const row = await c.env.DB.prepare('SELECT library_json FROM user_libraries WHERE user_id = ?')
-    .bind(c.get('userId'))
-    .first<{ library_json: string }>()
-
-  return c.json(row ? (JSON.parse(row.library_json) as StudyLibrary) : starterLibrary)
+  return c.json(await loadUserLibrary(c.env.DB, c.get('userId')))
 })
 
 app.put('/api/library', async (c) => {
   const library = (await c.req.json()) as StudyLibrary
-  const updatedAt = new Date().toISOString()
-
-  await c.env.DB.prepare(
-    'INSERT INTO user_libraries (user_id, library_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET library_json = excluded.library_json, updated_at = excluded.updated_at',
-  )
-    .bind(c.get('userId'), JSON.stringify({ ...library, updatedAt }), updatedAt)
-    .run()
-
-  return c.json({ ...library, updatedAt })
+  return c.json(await replaceUserLibrary(c.env.DB, c.get('userId'), library))
 })
 
-app.post('/api/quiz/generate', async (c) => {
+app.post('/api/library/entries/ai', async (c) => {
   try {
-    const body = await c.req.json<{ durationMinutes?: number; label?: string }>()
-    const [settings, libraryRow] = await Promise.all([
-      c.env.DB.prepare('SELECT openai_key_ciphertext, openai_model FROM user_settings WHERE user_id = ?')
-        .bind(c.get('userId'))
-        .first<UserSettingsRow>(),
-      c.env.DB.prepare('SELECT library_json FROM user_libraries WHERE user_id = ?')
-        .bind(c.get('userId'))
-        .first<{ library_json: string }>(),
-    ])
+    const body = await c.req.json<{ type?: EntryType; term?: string }>()
+    const type = body.type === 'grammar' ? 'grammar' : 'vocabulary'
+    const term = body.term?.trim()
+
+    if (!term) {
+      return jsonError('Term is required.', 400)
+    }
+
+    const settings = await c.env.DB.prepare(
+      'SELECT openai_key_ciphertext, openai_model FROM user_settings WHERE user_id = ?',
+    )
+      .bind(c.get('userId'))
+      .first<UserSettingsRow>()
 
     if (!settings?.openai_key_ciphertext) {
       return jsonError('No stored OpenAI API key for this user.', 400)
     }
 
-    if (!c.env.APP_SECRET) {
-      return jsonError('Server misconfiguration: APP_SECRET is not set.', 500)
+    const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
+    const pendingEntry = buildPendingEntry(type, term)
+    const library = await prependLibraryEntry(c.env.DB, c.get('userId'), pendingEntry)
+
+    c.executionCtx.waitUntil(
+      enrichEntryInBackground({
+        db: c.env.DB,
+        userId: c.get('userId'),
+        entry: pendingEntry,
+        apiKey,
+        model: settings.openai_model || defaultOpenAiModels[0],
+      }),
+    )
+
+    return c.json({ entryId: pendingEntry.id, library }, 202)
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : 'AI entry generation failed.',
+      502,
+    )
+  }
+})
+
+app.post('/api/quiz/generate', async (c) => {
+  try {
+    const body = await c.req.json<{ durationMinutes?: number; label?: string }>()
+    const settings = await c.env.DB.prepare(
+      'SELECT openai_key_ciphertext, openai_model FROM user_settings WHERE user_id = ?',
+    )
+      .bind(c.get('userId'))
+      .first<UserSettingsRow>()
+
+    if (!settings?.openai_key_ciphertext) {
+      return jsonError('No stored OpenAI API key for this user.', 400)
     }
 
-    const library = libraryRow ? (JSON.parse(libraryRow.library_json) as StudyLibrary) : starterLibrary
+    const library = await loadUserLibrary(c.env.DB, c.get('userId'))
+    const readyEntries = library.entries.filter((entry) => !entry.status && entry.meaning.trim().length > 0)
     const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
     const quizSet = await generateAiQuizSet({
       apiKey,
       model: settings.openai_model || defaultOpenAiModels[0],
-      entries: library.entries,
+      entries: readyEntries,
       durationMinutes: body.durationMinutes ?? 45,
     })
 
@@ -269,15 +410,12 @@ app.post('/api/quiz/generate', async (c) => {
       quizSets: [quizSet, ...library.quizSets.filter((item) => item.id !== quizSet.id)],
     }
 
-    await c.env.DB.prepare('UPDATE user_libraries SET library_json = ?, updated_at = ? WHERE user_id = ?')
-      .bind(JSON.stringify(nextLibrary), nextLibrary.updatedAt, c.get('userId'))
-      .run()
-
-    return c.json({ quizSet, library: nextLibrary })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error('[quiz/generate]', message)
-    return jsonError(`Quiz generation failed: ${message}`, 500)
+    return c.json({ quizSet, library: await replaceUserLibrary(c.env.DB, c.get('userId'), nextLibrary) })
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : 'AI quiz generation failed.',
+      502,
+    )
   }
 })
 

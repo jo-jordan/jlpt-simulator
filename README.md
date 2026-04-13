@@ -12,7 +12,7 @@ A React + TypeScript + Vite study product for turning your own JLPT N2 notes int
 ## Features
 
 - Import local `json`, `md`, `txt`, and `docx` study docs.
-- Generate local quiz sets from your existing grammar and vocabulary entries.
+- Generate AI quiz sets from your existing grammar and vocabulary entries.
 - Generate richer AI quiz sets with `single_select`, `cloze_select`, and `order_select` questions.
 - Save AI-generated quiz sets back into a connected local JSON file when supported by the browser.
 - Persist the library and quiz history in browser storage even without a connected file.

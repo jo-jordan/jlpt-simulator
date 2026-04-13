@@ -1,4 +1,5 @@
 export type EntryType = 'vocabulary' | 'grammar'
+export type StudyEntryStatus = 'pending' | 'failed'
 export type LanguageCode = 'en' | 'zh-CN' | 'ja'
 export type JlptSection = 'language_knowledge' | 'reading' | 'listening'
 export type JlptSubsection = 'vocabulary' | 'grammar' | 'reading' | 'listening'
@@ -69,6 +70,10 @@ export interface StudyEntry {
   example?: string
   notes?: string
   sourceTitle?: string
+  status?: StudyEntryStatus
+  generationError?: string
+  requestedAt?: string
+  completedAt?: string
 }
 
 export interface QuizQuestionBase {
@@ -82,6 +87,7 @@ export interface QuizQuestionBase {
 
 export interface SingleSelectQuestion extends QuizQuestionBase {
   kind: 'single_select'
+  sentence?: string
   choices: string[]
   correctIndex: number
 }
