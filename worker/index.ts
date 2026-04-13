@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { createEntryId } from '../src/lib/constants'
-import { defaultLanguage, defaultOpenAiModels } from '../src/lib/constants'
+import { defaultLanguage, defaultOpenAiModels, defaultTargetLevel } from '../src/lib/constants'
 import { fetchOpenAiModels, generateAiEntryDetails, generateAiQuizSet } from '../src/lib/openai'
-import type { EntryType, LanguageCode, OpenAiSettings, StudyEntry, StudyLibrary } from '../src/types'
+import type { EntryType, JlptLevel, LanguageCode, OpenAiSettings, QuizResultRecord, StudyEntry, StudyLibrary } from '../src/types'
 import type { Env } from './env'
 import { decryptText, encryptText, hashPassword, signToken, verifyPassword, verifyToken } from './lib/crypto'
 import {
@@ -12,6 +12,7 @@ import {
   replaceUserLibrary,
   seedStarterLibrary,
 } from './lib/library-store'
+import { loadUserResultRecords, saveUserResultRecord } from './lib/result-store'
 
 type Variables = {
   userId: string
@@ -28,6 +29,7 @@ type UserSettingsRow = {
   openai_key_ciphertext: string | null
   openai_model: string
   language: string
+  target_level: string
   updated_at: string
 }
 
@@ -48,12 +50,17 @@ function createSessionToken(secret: string, userId: string, email: string) {
   })
 }
 
-function buildPendingEntry(type: EntryType, term: string): StudyEntry {
+function buildPendingEntry(
+  type: EntryType,
+  term: string,
+  targetLevel: JlptLevel,
+  entryId = createEntryId(),
+): StudyEntry {
   const requestedAt = new Date().toISOString()
 
   return {
-    id: createEntryId(),
-    level: 'N2',
+    id: entryId,
+    level: targetLevel,
     section: 'language_knowledge',
     subsection: type,
     item_type: type === 'grammar' ? '文の文法1' : '文脈規定',
@@ -109,6 +116,7 @@ async function enrichEntryInBackground({
   apiKey,
   model,
   language,
+  targetLevel,
 }: {
   db: D1Database
   userId: string
@@ -116,6 +124,7 @@ async function enrichEntryInBackground({
   apiKey: string
   model: string
   language: LanguageCode
+  targetLevel: JlptLevel
 }) {
   try {
     const details = await generateAiEntryDetails({
@@ -124,6 +133,7 @@ async function enrichEntryInBackground({
       type: entry.type,
       term: entry.term,
       language,
+      targetLevel,
     })
     const completedAt = new Date().toISOString()
     const nextEntry: StudyEntry = {
@@ -210,9 +220,9 @@ app.post('/api/auth/register', async (c) => {
     .bind(userId, email, passwordHash, createdAt)
     .run()
   await c.env.DB.prepare(
-    'INSERT INTO user_settings (user_id, openai_key_ciphertext, openai_model, language, updated_at) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO user_settings (user_id, openai_key_ciphertext, openai_model, language, target_level, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
   )
-    .bind(userId, null, defaultOpenAiModels[0], defaultLanguage, createdAt)
+    .bind(userId, null, defaultOpenAiModels[0], defaultLanguage, defaultTargetLevel, createdAt)
     .run()
   await seedStarterLibrary(c.env.DB, userId, createdAt)
 
@@ -247,7 +257,7 @@ app.get('/api/auth/me', async (c) => {
 
 app.get('/api/settings', async (c) => {
   const settings = await c.env.DB.prepare(
-    'SELECT openai_key_ciphertext, openai_model, language, updated_at FROM user_settings WHERE user_id = ?',
+    'SELECT openai_key_ciphertext, openai_model, language, target_level, updated_at FROM user_settings WHERE user_id = ?',
   )
     .bind(c.get('userId'))
     .first<UserSettingsRow>()
@@ -258,6 +268,7 @@ app.get('/api/settings', async (c) => {
     availableModels: defaultOpenAiModels,
     lastSyncedAt: settings?.updated_at,
     language: (settings?.language as OpenAiSettings['language']) ?? defaultLanguage,
+    targetLevel: (settings?.target_level as OpenAiSettings['targetLevel']) ?? defaultTargetLevel,
     hasStoredApiKey: Boolean(settings?.openai_key_ciphertext),
   }
 
@@ -269,9 +280,10 @@ app.put('/api/settings', async (c) => {
     apiKey?: string
     selectedModel?: string
     language?: OpenAiSettings['language']
+    targetLevel?: OpenAiSettings['targetLevel']
   }>()
   const current = await c.env.DB.prepare(
-    'SELECT openai_key_ciphertext, openai_model, language FROM user_settings WHERE user_id = ?',
+    'SELECT openai_key_ciphertext, openai_model, language, target_level FROM user_settings WHERE user_id = ?',
   )
     .bind(c.get('userId'))
     .first<UserSettingsRow>()
@@ -285,12 +297,13 @@ app.put('/api/settings', async (c) => {
 
   const selectedModel = body.selectedModel?.trim() || current?.openai_model || defaultOpenAiModels[0]
   const language = body.language || (current?.language as OpenAiSettings['language']) || defaultLanguage
+  const targetLevel = body.targetLevel || (current?.target_level as OpenAiSettings['targetLevel']) || defaultTargetLevel
   const updatedAt = new Date().toISOString()
 
   await c.env.DB.prepare(
-    'INSERT INTO user_settings (user_id, openai_key_ciphertext, openai_model, language, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET openai_key_ciphertext = excluded.openai_key_ciphertext, openai_model = excluded.openai_model, language = excluded.language, updated_at = excluded.updated_at',
+    'INSERT INTO user_settings (user_id, openai_key_ciphertext, openai_model, language, target_level, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET openai_key_ciphertext = excluded.openai_key_ciphertext, openai_model = excluded.openai_model, language = excluded.language, target_level = excluded.target_level, updated_at = excluded.updated_at',
   )
-    .bind(c.get('userId'), cipherText, selectedModel, language, updatedAt)
+    .bind(c.get('userId'), cipherText, selectedModel, language, targetLevel, updatedAt)
     .run()
 
   return c.json({
@@ -299,13 +312,14 @@ app.put('/api/settings', async (c) => {
     availableModels: defaultOpenAiModels,
     lastSyncedAt: updatedAt,
     language,
+    targetLevel,
     hasStoredApiKey: Boolean(cipherText),
   })
 })
 
 app.post('/api/settings/models/refresh', async (c) => {
   const settings = await c.env.DB.prepare(
-    'SELECT openai_key_ciphertext, openai_model, language, updated_at FROM user_settings WHERE user_id = ?',
+    'SELECT openai_key_ciphertext, openai_model, language, target_level, updated_at FROM user_settings WHERE user_id = ?',
   )
     .bind(c.get('userId'))
     .first<UserSettingsRow>()
@@ -325,6 +339,7 @@ app.post('/api/settings/models/refresh', async (c) => {
     availableModels,
     lastSyncedAt: new Date().toISOString(),
     language: (settings.language as OpenAiSettings['language']) ?? defaultLanguage,
+    targetLevel: (settings.target_level as OpenAiSettings['targetLevel']) ?? defaultTargetLevel,
     hasStoredApiKey: true,
   })
 })
@@ -338,9 +353,30 @@ app.put('/api/library', async (c) => {
   return c.json(await replaceUserLibrary(c.env.DB, c.get('userId'), library))
 })
 
+app.get('/api/results', async (c) => {
+  return c.json(await loadUserResultRecords(c.env.DB, c.get('userId')))
+})
+
+app.post('/api/results', async (c) => {
+  const record = (await c.req.json()) as QuizResultRecord
+
+  if (
+    !record?.id ||
+    !record.quizSetId ||
+    !record.quizTitle ||
+    !record.submittedAt ||
+    !record.startedAt ||
+    !Array.isArray(record.incorrectQuestions)
+  ) {
+    return jsonError('Invalid result record payload.', 400)
+  }
+
+  return c.json(await saveUserResultRecord(c.env.DB, c.get('userId'), record), 201)
+})
+
 app.post('/api/library/entries/ai', async (c) => {
   try {
-    const body = await c.req.json<{ type?: EntryType; term?: string; language?: LanguageCode }>()
+    const body = await c.req.json<{ type?: EntryType; term?: string; language?: LanguageCode; targetLevel?: JlptLevel }>()
     const type = body.type === 'grammar' ? 'grammar' : 'vocabulary'
     const term = body.term?.trim()
 
@@ -349,7 +385,7 @@ app.post('/api/library/entries/ai', async (c) => {
     }
 
     const settings = await c.env.DB.prepare(
-      'SELECT openai_key_ciphertext, openai_model, language FROM user_settings WHERE user_id = ?',
+      'SELECT openai_key_ciphertext, openai_model, language, target_level FROM user_settings WHERE user_id = ?',
     )
       .bind(c.get('userId'))
       .first<UserSettingsRow>()
@@ -360,7 +396,8 @@ app.post('/api/library/entries/ai', async (c) => {
 
     const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
     const language = body.language || (settings.language as LanguageCode) || defaultLanguage
-    const pendingEntry = buildPendingEntry(type, term)
+    const targetLevel = body.targetLevel || (settings.target_level as JlptLevel) || defaultTargetLevel
+    const pendingEntry = buildPendingEntry(type, term, targetLevel)
     const library = await prependLibraryEntry(c.env.DB, c.get('userId'), pendingEntry)
 
     c.executionCtx.waitUntil(
@@ -371,6 +408,7 @@ app.post('/api/library/entries/ai', async (c) => {
         apiKey,
         model: settings.openai_model || defaultOpenAiModels[0],
         language,
+        targetLevel,
       }),
     )
 
@@ -383,11 +421,70 @@ app.post('/api/library/entries/ai', async (c) => {
   }
 })
 
+app.post('/api/library/entries/:entryId/regenerate', async (c) => {
+  try {
+    const body = await c.req.json<{ type?: EntryType; term?: string; language?: LanguageCode; targetLevel?: JlptLevel }>()
+    const entryId = c.req.param('entryId')
+    const settings = await c.env.DB.prepare(
+      'SELECT openai_key_ciphertext, openai_model, language, target_level FROM user_settings WHERE user_id = ?',
+    )
+      .bind(c.get('userId'))
+      .first<UserSettingsRow>()
+
+    if (!settings?.openai_key_ciphertext) {
+      return jsonError('No stored OpenAI API key for this user.', 400)
+    }
+
+    const library = await loadUserLibrary(c.env.DB, c.get('userId'))
+    const existingEntry = library.entries.find((entry) => entry.id === entryId)
+
+    if (!existingEntry) {
+      return jsonError('Entry not found.', 404)
+    }
+
+    const type = body.type === 'grammar' ? 'grammar' : body.type === 'vocabulary' ? 'vocabulary' : existingEntry.type
+    const term = body.term?.trim() || existingEntry.term.trim()
+
+    if (!term) {
+      return jsonError('Term is required.', 400)
+    }
+
+    const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
+    const language = body.language || (settings.language as LanguageCode) || defaultLanguage
+    const targetLevel = body.targetLevel || (settings.target_level as JlptLevel) || defaultTargetLevel
+    const pendingEntry = buildPendingEntry(type, term, targetLevel, entryId)
+    const nextLibrary = await replaceLibraryEntryIfPresent(c.env.DB, c.get('userId'), pendingEntry)
+
+    if (!nextLibrary) {
+      return jsonError('Entry not found.', 404)
+    }
+
+    c.executionCtx.waitUntil(
+      enrichEntryInBackground({
+        db: c.env.DB,
+        userId: c.get('userId'),
+        entry: pendingEntry,
+        apiKey,
+        model: settings.openai_model || defaultOpenAiModels[0],
+        language,
+        targetLevel,
+      }),
+    )
+
+    return c.json({ entryId, library: nextLibrary }, 202)
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : 'AI entry generation failed.',
+      502,
+    )
+  }
+})
+
 app.post('/api/quiz/generate', async (c) => {
   try {
-    const body = await c.req.json<{ durationMinutes?: number; label?: string; language?: LanguageCode }>()
+    const body = await c.req.json<{ durationMinutes?: number; label?: string; targetLevel?: JlptLevel }>()
     const settings = await c.env.DB.prepare(
-      'SELECT openai_key_ciphertext, openai_model, language FROM user_settings WHERE user_id = ?',
+      'SELECT openai_key_ciphertext, openai_model, language, target_level FROM user_settings WHERE user_id = ?',
     )
       .bind(c.get('userId'))
       .first<UserSettingsRow>()
@@ -399,13 +496,13 @@ app.post('/api/quiz/generate', async (c) => {
     const library = await loadUserLibrary(c.env.DB, c.get('userId'))
     const readyEntries = library.entries.filter((entry) => !entry.status && entry.meaning.trim().length > 0)
     const apiKey = await decryptText(c.env.APP_SECRET, settings.openai_key_ciphertext)
-    const language = body.language || (settings.language as LanguageCode) || defaultLanguage
+    const targetLevel = body.targetLevel || (settings.target_level as JlptLevel) || defaultTargetLevel
     const quizSet = await generateAiQuizSet({
       apiKey,
       model: settings.openai_model || defaultOpenAiModels[0],
       entries: readyEntries,
       durationMinutes: body.durationMinutes ?? 45,
-      language,
+      targetLevel,
     })
 
     if (body.label?.trim()) {

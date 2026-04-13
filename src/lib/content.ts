@@ -2,22 +2,27 @@ import type {
   ClozeSelectQuestion,
   EntryType,
   ExamPreset,
+  ExamSession,
+  IncorrectQuestionRecord,
   JlptAnswerFormat,
+  JlptLevel,
   JlptSection,
   JlptSourceType,
   JlptSubsection,
   OrderSelectQuestion,
   QuizQuestion,
   QuizSet,
+  QuizResultRecord,
   SessionAnswer,
   SingleSelectQuestion,
   StudyEntry,
   StudyLibrary,
 } from '../types'
-import { createEntryId, createQuizSetId } from './constants'
+import { createEntryId, createQuizSetId, createResultRecordId, defaultTargetLevel, jlptLevels } from './constants'
 
 export const STORAGE_KEY = 'jlpt-simulator-library'
 export const SETTINGS_KEY = 'jlpt-simulator-openai-settings'
+export const RESULTS_KEY = 'jlpt-simulator-result-records'
 
 const vocabularyItemTypes = ['漢字読み', '表記', '語形成', '文脈規定', '言い換え類義', '用法']
 const grammarItemTypes = ['文の文法1', '文の文法2', '文章の文法']
@@ -26,6 +31,91 @@ function pickItemType(type: EntryType, seed: string) {
   const list = type === 'grammar' ? grammarItemTypes : vocabularyItemTypes
   const hash = Array.from(seed).reduce((total, char) => total + char.charCodeAt(0), 0)
   return list[hash % list.length]
+}
+
+function normalizeJlptLevel(value: unknown): JlptLevel {
+  return typeof value === 'string' && jlptLevels.includes(value as JlptLevel)
+    ? (value as JlptLevel)
+    : defaultTargetLevel
+}
+
+function normalizeComparableText(value: string) {
+  return value
+    .normalize('NFKC')
+    .replace(/[\s\u3000]+/gu, '')
+    .toLowerCase()
+}
+
+function hasDuplicateChoices(choices: string[]) {
+  const seen = new Set<string>()
+
+  for (const choice of choices) {
+    const normalized = normalizeComparableText(choice)
+
+    if (!normalized || seen.has(normalized)) {
+      return true
+    }
+
+    seen.add(normalized)
+  }
+
+  return false
+}
+
+function containsExactChoiceText(haystack: string, choice: string) {
+  const normalizedChoice = normalizeComparableText(choice)
+
+  if (!normalizedChoice) {
+    return false
+  }
+
+  return normalizeComparableText(haystack).includes(normalizedChoice)
+}
+
+function extractQuotedTarget(prompt: string) {
+  const match = prompt.match(/[「『]([^「」『』]+)[」』]/u)
+  return match?.[1]?.trim() || ''
+}
+
+function buildEntryLookup(entries: StudyEntry[]) {
+  return {
+    byId: new Map(entries.map((entry) => [entry.id, entry])),
+    byTerm: new Map(entries.map((entry) => [entry.term, entry])),
+  }
+}
+
+function resolveQuestionEntry(
+  question: Pick<QuizQuestion, 'sourceEntryId' | 'prompt'>,
+  entryLookup?: ReturnType<typeof buildEntryLookup>,
+) {
+  if (!entryLookup) {
+    return undefined
+  }
+
+  if (question.sourceEntryId && entryLookup.byId.has(question.sourceEntryId)) {
+    return entryLookup.byId.get(question.sourceEntryId)
+  }
+
+  const quotedTarget = extractQuotedTarget(question.prompt)
+
+  if (!quotedTarget) {
+    return undefined
+  }
+
+  return entryLookup.byTerm.get(quotedTarget)
+}
+
+function normalizeSessionAnswerValue(value: unknown): SessionAnswer | undefined {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    const fragments = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    return fragments.length ? fragments : undefined
+  }
+
+  return undefined
 }
 
 function getSchemaDefaults(type: EntryType, term: string, example?: string) {
@@ -40,7 +130,7 @@ function getSchemaDefaults(type: EntryType, term: string, example?: string) {
     type === 'grammar' ? '请选择最合适的语法项目。' : '请选择最合适的词汇项目。'
 
   return {
-    level: 'N2' as const,
+    level: defaultTargetLevel,
     section,
     subsection,
     item_type,
@@ -106,7 +196,7 @@ export const examPresets: ExamPreset[] = [
   },
 ]
 
-function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEntry | null {
+export function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEntry | null {
   const status = raw.status === 'pending' || raw.status === 'failed' ? raw.status : undefined
 
   if (!raw.term || (!status && !raw.meaning?.trim())) {
@@ -119,7 +209,7 @@ function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEn
   return {
     id: raw.id ?? createEntryId(),
     ...defaults,
-    level: raw.level === 'N2' ? 'N2' : defaults.level,
+    level: normalizeJlptLevel(raw.level),
     section: raw.section ?? defaults.section,
     subsection: raw.subsection ?? defaults.subsection,
     item_type: raw.item_type?.trim() || defaults.item_type,
@@ -169,9 +259,13 @@ function normalizeEntry(raw: Partial<StudyEntry>, sourceTitle?: string): StudyEn
   }
 }
 
-function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
+function normalizeQuestion(
+  raw: Record<string, unknown>,
+  entryLookup?: ReturnType<typeof buildEntryLookup>,
+): QuizQuestion | null {
   const prompt = typeof raw.prompt === 'string' ? raw.prompt.trim() : ''
   const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+  const sourceEntryId = typeof raw.sourceEntryId === 'string' ? raw.sourceEntryId.trim() : undefined
   const section = raw.section === 'grammar' || raw.section === 'vocabulary' ? raw.section : 'mixed'
   const itemType = typeof raw.itemType === 'string' ? raw.itemType.trim() : undefined
   const jlptSection =
@@ -189,12 +283,17 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
     const choices = Array.isArray(raw.choices) ? raw.choices.filter((item): item is string => typeof item === 'string') : []
     const correctIndex = typeof raw.correctIndex === 'number' ? raw.correctIndex : -1
 
-    if (choices.length < 2 || correctIndex < 0 || correctIndex >= choices.length) {
+    if (choices.length < 2 || correctIndex < 0 || correctIndex >= choices.length || hasDuplicateChoices(choices)) {
+      return null
+    }
+
+    if (containsExactChoiceText(prompt, choices[correctIndex]) || (sentence && containsExactChoiceText(sentence, choices[correctIndex]))) {
       return null
     }
 
     const question: SingleSelectQuestion = {
       id: typeof raw.id === 'string' ? raw.id : createEntryId(),
+      ...(sourceEntryId ? { sourceEntryId } : {}),
       kind: 'single_select',
       section,
       prompt,
@@ -205,6 +304,18 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
       correctIndex,
       explanation,
     }
+
+    const sourceEntry = resolveQuestionEntry(question, entryLookup)
+    const sourceReading = sourceEntry?.reading ? normalizeComparableText(sourceEntry.reading) : ''
+
+    if (
+      itemType === '言い換え類義' &&
+      sourceReading &&
+      choices.some((choice) => normalizeComparableText(choice) === sourceReading)
+    ) {
+      return null
+    }
+
     return question
   }
 
@@ -212,13 +323,22 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
     const sentence = typeof raw.sentence === 'string' ? raw.sentence.trim() : ''
     const choices = Array.isArray(raw.choices) ? raw.choices.filter((item): item is string => typeof item === 'string') : []
     const correctIndex = typeof raw.correctIndex === 'number' ? raw.correctIndex : -1
+    const blankCount = sentence.match(/＿+/gu)?.length ?? 0
 
-    if (!sentence || choices.length < 2 || correctIndex < 0 || correctIndex >= choices.length) {
+    if (!sentence || choices.length < 2 || correctIndex < 0 || correctIndex >= choices.length || blankCount !== 1 || hasDuplicateChoices(choices)) {
+      return null
+    }
+
+    if (
+      containsExactChoiceText(prompt, choices[correctIndex]) ||
+      containsExactChoiceText(sentence.replace(/＿+/gu, ''), choices[correctIndex])
+    ) {
       return null
     }
 
     const question: ClozeSelectQuestion = {
       id: typeof raw.id === 'string' ? raw.id : createEntryId(),
+      ...(sourceEntryId ? { sourceEntryId } : {}),
       kind: 'cloze_select',
       section,
       prompt,
@@ -246,6 +366,7 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
 
     const question: OrderSelectQuestion = {
       id: typeof raw.id === 'string' ? raw.id : createEntryId(),
+      ...(sourceEntryId ? { sourceEntryId } : {}),
       kind: 'order_select',
       section,
       prompt,
@@ -261,14 +382,17 @@ function normalizeQuestion(raw: Record<string, unknown>): QuizQuestion | null {
   return null
 }
 
-function normalizeQuizSet(raw: Record<string, unknown>): QuizSet | null {
+function normalizeQuizSet(
+  raw: Record<string, unknown>,
+  entryLookup?: ReturnType<typeof buildEntryLookup>,
+): QuizSet | null {
   if (raw.source === 'local') {
     return null
   }
 
   const questions = Array.isArray(raw.questions)
     ? raw.questions
-        .map((question) => normalizeQuestion(question as Record<string, unknown>))
+        .map((question) => normalizeQuestion(question as Record<string, unknown>, entryLookup))
         .filter((question): question is QuizQuestion => Boolean(question))
     : []
 
@@ -287,8 +411,140 @@ function normalizeQuizSet(raw: Record<string, unknown>): QuizSet | null {
   }
 }
 
-function aiQuizSetsOnly(quizSets: QuizSet[]) {
-  return quizSets.filter((quizSet) => quizSet.source === 'ai')
+function aiQuizSetsOnly(quizSets: QuizSet[], entries: StudyEntry[] = []) {
+  const entryLookup = buildEntryLookup(entries)
+
+  return quizSets
+    .map((quizSet) => normalizeQuizSet(quizSet as unknown as Record<string, unknown>, entryLookup))
+    .filter((quizSet): quizSet is QuizSet => Boolean(quizSet))
+}
+
+function normalizeIncorrectQuestionRecord(raw: Record<string, unknown>): IncorrectQuestionRecord | null {
+  const questionNumber =
+    typeof raw.questionNumber === 'number' && Number.isInteger(raw.questionNumber) && raw.questionNumber > 0
+      ? raw.questionNumber
+      : -1
+  const question =
+    raw.question && typeof raw.question === 'object'
+      ? normalizeQuestion(raw.question as Record<string, unknown>)
+      : null
+  const userAnswer = normalizeSessionAnswerValue(raw.userAnswer)
+
+  if (questionNumber < 0 || !question) {
+    return null
+  }
+
+  return {
+    questionNumber,
+    question,
+    ...(userAnswer !== undefined ? { userAnswer } : {}),
+  }
+}
+
+export function normalizeResultRecord(raw: Record<string, unknown>): QuizResultRecord | null {
+  const submittedAt = typeof raw.submittedAt === 'string' ? raw.submittedAt : ''
+  const startedAt = typeof raw.startedAt === 'string' ? raw.startedAt : ''
+  const durationMs = typeof raw.durationMs === 'number' && raw.durationMs >= 0 ? raw.durationMs : -1
+  const answeredCount = typeof raw.answeredCount === 'number' && raw.answeredCount >= 0 ? raw.answeredCount : -1
+  const correctCount = typeof raw.correctCount === 'number' && raw.correctCount >= 0 ? raw.correctCount : -1
+  const questionCount = typeof raw.questionCount === 'number' && raw.questionCount >= 0 ? raw.questionCount : -1
+  const scorePercent = typeof raw.scorePercent === 'number' && raw.scorePercent >= 0 ? raw.scorePercent : -1
+  const incorrectQuestions = Array.isArray(raw.incorrectQuestions)
+    ? raw.incorrectQuestions
+        .map((item) =>
+          item && typeof item === 'object' ? normalizeIncorrectQuestionRecord(item as Record<string, unknown>) : null,
+        )
+        .filter((item): item is IncorrectQuestionRecord => Boolean(item))
+    : []
+
+  if (
+    typeof raw.id !== 'string' ||
+    typeof raw.quizSetId !== 'string' ||
+    typeof raw.quizTitle !== 'string' ||
+    !submittedAt ||
+    !startedAt ||
+    durationMs < 0 ||
+    answeredCount < 0 ||
+    correctCount < 0 ||
+    questionCount <= 0 ||
+    scorePercent < 0
+  ) {
+    return null
+  }
+
+  return {
+    id: raw.id,
+    quizSetId: raw.quizSetId,
+    quizTitle: raw.quizTitle,
+    submittedAt,
+    startedAt,
+    durationMs,
+    answeredCount,
+    correctCount,
+    questionCount,
+    scorePercent,
+    incorrectQuestions,
+  }
+}
+
+export function normalizeResultRecords(raw: unknown): QuizResultRecord[] {
+  if (!Array.isArray(raw)) {
+    return []
+  }
+
+  return raw
+    .map((item) => (item && typeof item === 'object' ? normalizeResultRecord(item as Record<string, unknown>) : null))
+    .filter((item): item is QuizResultRecord => Boolean(item))
+    .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
+}
+
+export function mergeResultRecords(...groups: QuizResultRecord[][]) {
+  const merged = new Map<string, QuizResultRecord>()
+
+  groups.flat().forEach((record) => {
+    if (!merged.has(record.id)) {
+      merged.set(record.id, record)
+    }
+  })
+
+  return Array.from(merged.values()).sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
+}
+
+export function buildQuizResultRecord(session: ExamSession): QuizResultRecord {
+  const submittedAt = Math.min(session.submittedAt ?? Date.now(), session.endsAt)
+  const answeredCount = Object.keys(session.answers).length
+  const correctCount = countCorrectAnswers(session.quizSet, session.answers)
+  const questionCount = session.quizSet.questions.length
+  const scorePercent = questionCount ? Math.round((correctCount / questionCount) * 100) : 0
+  const incorrectQuestions = session.quizSet.questions
+    .map((question, index) => {
+      const userAnswer = session.answers[question.id]
+
+      if (isQuestionCorrect(question, userAnswer)) {
+        return null
+      }
+
+      return {
+        questionNumber: index + 1,
+        question,
+        ...(userAnswer !== undefined ? { userAnswer } : {}),
+      }
+    })
+    .filter((item): item is IncorrectQuestionRecord => Boolean(item))
+
+  return {
+    id: createResultRecordId(),
+    quizSetId: session.quizSet.id,
+    quizTitle: session.quizSet.title,
+    submittedAt: new Date(submittedAt).toISOString(),
+    startedAt: new Date(session.startedAt).toISOString(),
+    durationMs: Math.max(0, submittedAt - session.startedAt),
+    answeredCount,
+    correctCount,
+    questionCount,
+    scorePercent,
+    incorrectQuestions,
+  }
 }
 
 function parsePipeSeparated(text: string, sourceTitle: string) {
@@ -355,22 +611,30 @@ function parsePipeSeparated(text: string, sourceTitle: string) {
 
 export function createLibrary(
   entries: StudyEntry[],
-  title = 'My JLPT N2 Library',
+  title = `My JLPT ${defaultTargetLevel} Library`,
   quizSets: QuizSet[] = [],
+  level: JlptLevel = defaultTargetLevel,
 ): StudyLibrary {
   return {
     title,
-    level: 'N2',
+    level,
     updatedAt: new Date().toISOString(),
     entries,
-    quizSets: aiQuizSetsOnly(quizSets),
+    quizSets: aiQuizSetsOnly(quizSets, entries),
   }
 }
 
 export function sanitizeLibrary(library: StudyLibrary): StudyLibrary {
-  const quizSets = aiQuizSetsOnly(library.quizSets)
+  const quizSets = aiQuizSetsOnly(library.quizSets, library.entries)
 
-  if (quizSets.length === library.quizSets.length) {
+  const hasChanged =
+    quizSets.length !== library.quizSets.length ||
+    quizSets.some((quizSet, index) => {
+      const currentQuizSet = library.quizSets[index]
+      return !currentQuizSet || currentQuizSet.id !== quizSet.id || currentQuizSet.questions.length !== quizSet.questions.length
+    })
+
+  if (!hasChanged) {
     return library
   }
 
@@ -381,7 +645,7 @@ export function sanitizeLibrary(library: StudyLibrary): StudyLibrary {
   }
 }
 
-export function parseLibraryJson(text: string, fallbackTitle = 'My JLPT N2 Library'): StudyLibrary {
+export function parseLibraryJson(text: string, fallbackTitle = `My JLPT ${defaultTargetLevel} Library`): StudyLibrary {
   const parsed = JSON.parse(text) as
     | StudyLibrary
     | StudyEntry[]
@@ -396,17 +660,19 @@ export function parseLibraryJson(text: string, fallbackTitle = 'My JLPT N2 Libra
     !Array.isArray(parsed) && 'quizSets' in parsed && Array.isArray(parsed.quizSets)
       ? parsed.quizSets
       : []
+  const entries = rawEntries
+    .map((entry) => normalizeEntry(entry, fallbackTitle))
+    .filter((entry): entry is StudyEntry => Boolean(entry))
+  const entryLookup = buildEntryLookup(entries)
 
   return {
     title:
       !Array.isArray(parsed) && typeof parsed.title === 'string' ? parsed.title : fallbackTitle,
-    level: !Array.isArray(parsed) && typeof parsed.level === 'string' ? parsed.level : 'N2',
+    level: !Array.isArray(parsed) ? normalizeJlptLevel(parsed.level) : defaultTargetLevel,
     updatedAt: new Date().toISOString(),
-    entries: rawEntries
-      .map((entry) => normalizeEntry(entry, fallbackTitle))
-      .filter((entry): entry is StudyEntry => Boolean(entry)),
+    entries,
     quizSets: rawQuizSets
-      .map((quizSet) => normalizeQuizSet(quizSet as unknown as Record<string, unknown>))
+      .map((quizSet) => normalizeQuizSet(quizSet as unknown as Record<string, unknown>, entryLookup))
       .filter((quizSet): quizSet is QuizSet => Boolean(quizSet)),
   }
 }
@@ -473,7 +739,7 @@ export function countCorrectAnswers(quizSet: QuizSet, answers: Record<string, Se
 }
 
 export function upsertQuizSet(library: StudyLibrary, quizSet: QuizSet): StudyLibrary {
-  const nextQuizSets = [quizSet, ...aiQuizSetsOnly(library.quizSets).filter((item) => item.id !== quizSet.id)]
+  const nextQuizSets = [quizSet, ...aiQuizSetsOnly(library.quizSets, library.entries).filter((item) => item.id !== quizSet.id)]
 
   return {
     ...library,

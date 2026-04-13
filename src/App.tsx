@@ -2,20 +2,25 @@ import { startTransition, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { starterLibrary } from './data/starterLibrary'
 import {
+  fetchRemoteResults,
   fetchRemoteLibrary,
   generateRemoteEntry,
   fetchRemoteSettings,
   generateRemoteQuiz,
+  regenerateRemoteEntry,
   loginUser,
   refreshRemoteModels,
+  saveRemoteResult,
   registerUser,
   saveRemoteLibrary,
   saveRemoteSettings,
   type ApiSession,
 } from './lib/api'
 import {
+  RESULTS_KEY,
   SETTINGS_KEY,
   STORAGE_KEY,
+  buildQuizResultRecord,
   countCorrectAnswers,
   countReadyEntries,
   createLibrary,
@@ -24,10 +29,13 @@ import {
   getEntryCounts,
   importEntriesFromFile,
   isEntryReady,
+  mergeResultRecords,
+  normalizeEntry,
+  normalizeResultRecords,
   parseLibraryJson,
   sanitizeLibrary,
 } from './lib/content'
-import { defaultLanguage } from './lib/constants'
+import { defaultLanguage, jlptLevels } from './lib/constants'
 import { t } from './lib/i18n'
 import { createDefaultOpenAiSettings } from './lib/openai'
 import type {
@@ -38,6 +46,7 @@ import type {
   OpenAiSettings,
   OrderSelectQuestion,
   QuizQuestion,
+  QuizResultRecord,
   QuizSet,
   SessionAnswer,
   StudyEntry,
@@ -46,8 +55,16 @@ import type {
 
 const defaultPreset = examPresets[0]
 const SESSION_KEY = 'jlpt-simulator-session'
-type AppView = 'home' | 'library' | 'settings'
+type AppView = 'home' | 'library' | 'records' | 'settings'
 type SettingsView = 'root' | 'account' | 'openai'
+type EntryEditForm = {
+  type: EntryType
+  term: string
+  reading: string
+  meaning: string
+  example: string
+  notes: string
+}
 
 type FileSystemHandle = {
   getFile: () => Promise<File>
@@ -76,6 +93,17 @@ function formatDate(value: string, language: LanguageCode) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+function emptyEntryEditForm(): EntryEditForm {
+  return {
+    type: 'vocabulary',
+    term: '',
+    reading: '',
+    meaning: '',
+    example: '',
+    notes: '',
+  }
 }
 
 function App() {
@@ -107,6 +135,8 @@ function App() {
         ...(JSON.parse(saved) as Partial<OpenAiSettings>),
         language:
           (JSON.parse(saved) as Partial<OpenAiSettings>).language ?? createDefaultOpenAiSettings().language,
+        targetLevel:
+          (JSON.parse(saved) as Partial<OpenAiSettings>).targetLevel ?? createDefaultOpenAiSettings().targetLevel,
       }
     } catch {
       return createDefaultOpenAiSettings()
@@ -134,6 +164,20 @@ function App() {
   const [currentView, setCurrentView] = useState<AppView>('home')
   const [settingsView, setSettingsView] = useState<SettingsView>('root')
   const [session, setSession] = useState<ExamSession | null>(null)
+  const [resultRecords, setResultRecords] = useState<QuizResultRecord[]>(() => {
+    const saved = window.localStorage.getItem(RESULTS_KEY)
+
+    if (!saved) {
+      return []
+    }
+
+    try {
+      return normalizeResultRecords(JSON.parse(saved))
+    } catch {
+      return []
+    }
+  })
+  const [selectedResultRecordId, setSelectedResultRecordId] = useState<string | null>(null)
   const [remainingMs, setRemainingMs] = useState(defaultPreset.durationMinutes * 60_000)
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0)
   const [importStatus, setImportStatus] = useState(t(defaultLanguage, 'starterLoaded'))
@@ -142,10 +186,13 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [isRefreshingModels, setIsRefreshingModels] = useState(false)
   const [isCreatingEntry, setIsCreatingEntry] = useState(false)
+  const [regeneratingEntryId, setRegeneratingEntryId] = useState<string | null>(null)
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
   const [entryForm, setEntryForm] = useState({
     type: 'vocabulary' as EntryType,
     term: '',
   })
+  const [editForm, setEditForm] = useState<EntryEditForm>(() => emptyEntryEditForm())
 
   const selectedPreset =
     examPresets.find((preset) => preset.id === selectedPresetId) ?? defaultPreset
@@ -153,6 +200,8 @@ function App() {
   const tr = (key: string, params?: Record<string, string | number>) => t(language, key, params)
   const counts = getEntryCounts(library.entries)
   const readyEntryCount = countReadyEntries(library.entries)
+  const vocabularyEntries = library.entries.filter((entry) => entry.type === 'vocabulary')
+  const grammarEntries = library.entries.filter((entry) => entry.type === 'grammar')
   const currentQuizSet = session?.quizSet
   const questions = currentQuizSet?.questions ?? []
   const activeQuestion = questions[activeQuestionIndex]
@@ -162,6 +211,14 @@ function App() {
     currentQuizSet && currentQuizSet.questions.length
       ? Math.round((correctCount / currentQuizSet.questions.length) * 100)
       : 0
+  const effectiveSubmittedAt =
+    session?.submittedAt !== undefined ? Math.min(session.submittedAt, session.endsAt) : undefined
+  const elapsedMs =
+    session && effectiveSubmittedAt !== undefined ? Math.max(0, effectiveSubmittedAt - session.startedAt) : 0
+  const selectedResultRecord =
+    resultRecords.find((record) => record.id === selectedResultRecordId) ?? resultRecords[0] ?? null
+  const latestResultRecord = resultRecords[0] ?? null
+  const totalMistakeCount = resultRecords.reduce((total, record) => total + record.incorrectQuestions.length, 0)
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(library))
@@ -170,6 +227,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...openAiSettings, apiKey: '' }))
   }, [openAiSettings])
+
+  useEffect(() => {
+    window.localStorage.setItem(RESULTS_KEY, JSON.stringify(resultRecords))
+  }, [resultRecords])
 
   useEffect(() => {
     if (userSession) {
@@ -183,6 +244,19 @@ function App() {
   useEffect(() => {
     document.documentElement.lang = language
   }, [language])
+
+  useEffect(() => {
+    if (!resultRecords.length) {
+      if (selectedResultRecordId) {
+        setSelectedResultRecordId(null)
+      }
+      return
+    }
+
+    if (!selectedResultRecordId || !resultRecords.some((record) => record.id === selectedResultRecordId)) {
+      setSelectedResultRecordId(resultRecords[0].id)
+    }
+  }, [resultRecords, selectedResultRecordId])
 
   useEffect(() => {
     if (!userSession) {
@@ -247,10 +321,10 @@ function App() {
   function presetDescription(preset: ExamPreset) {
     if (preset.id === 'full') {
       return language === 'zh-CN'
-        ? '更接近 N2 语言知识部分的长时模拟。'
+        ? '更接近 JLPT 语言知识部分的长时模拟。'
         : language === 'ja'
-          ? 'N2の言語知識に近い長めの模試です。'
-          : 'A longer N2-style language knowledge session.'
+          ? 'JLPTの言語知識に近い長めの模試です。'
+          : 'A longer JLPT-style language knowledge session.'
     }
     if (preset.id === 'focus') {
       return language === 'zh-CN'
@@ -276,6 +350,43 @@ function App() {
     return question.itemType || questionKindLabel(question.kind)
   }
 
+  function formatQuestionAnswer(question: QuizQuestion, answer: SessionAnswer | undefined) {
+    if (question.kind === 'order_select') {
+      return Array.isArray(answer) && answer.length ? answer.join(' ') : tr('notAnswered')
+    }
+
+    return typeof answer === 'number' ? question.choices[answer] : tr('notAnswered')
+  }
+
+  function formatCorrectAnswer(question: QuizQuestion) {
+    if (question.kind === 'order_select') {
+      return question.correctOrder.join(' ')
+    }
+
+    return question.choices[question.correctIndex]
+  }
+
+  function renderQuestionReview(
+    question: QuizQuestion,
+    answer: SessionAnswer | undefined,
+    questionNumber: number,
+    tone: 'good' | 'bad',
+  ) {
+    return (
+      <article key={`${question.id}-${questionNumber}-${tone}`} className={tone === 'good' ? 'result-card good' : 'result-card bad'}>
+        <p className="result-index">{tr('questionLabel', { number: questionNumber })}</p>
+        {question.itemType ? <p className="muted">{question.itemType}</p> : null}
+        <p className="question-prompt small">{question.prompt}</p>
+        {question.kind !== 'order_select' && 'sentence' in question && question.sentence ? (
+          <p className="muted">{question.sentence}</p>
+        ) : null}
+        <p>{tr('yourAnswer')}: {formatQuestionAnswer(question, answer)}</p>
+        <p>{tr('correctAnswer')}: {formatCorrectAnswer(question)}</p>
+        <p className="muted">{question.explanation}</p>
+      </article>
+    )
+  }
+
   function openSettingsPage(nextPage: SettingsView = 'root') {
     setCurrentView('settings')
     setSettingsView(nextPage)
@@ -284,6 +395,11 @@ function App() {
   useEffect(() => {
     if (!session) {
       setRemainingMs(selectedPreset.durationMinutes * 60_000)
+      return
+    }
+
+    if (session.submittedAt) {
+      setRemainingMs(Math.max(0, session.endsAt - session.submittedAt))
       return
     }
 
@@ -309,6 +425,37 @@ function App() {
     const intervalId = window.setInterval(updateClock, 1000)
     return () => window.clearInterval(intervalId)
   }, [selectedPreset.durationMinutes, session])
+
+  useEffect(() => {
+    if (!session?.submittedAt || session.resultRecordId) {
+      return
+    }
+
+    const record = buildQuizResultRecord(session)
+    setResultRecords((current) => mergeResultRecords([record], current))
+    setSession((current) => {
+      if (!current || !current.submittedAt || current.resultRecordId) {
+        return current
+      }
+
+      return {
+        ...current,
+        resultRecordId: record.id,
+      }
+    })
+
+    if (!userSession) {
+      return
+    }
+
+    void saveRemoteResult(userSession.token, record)
+      .then((savedRecord) => {
+        setResultRecords((current) => mergeResultRecords([savedRecord], current))
+      })
+      .catch(() => {
+        setSavingStatus('Result saved locally, but cloud sync failed.')
+      })
+  }, [session, userSession])
 
   async function writeLibraryToConnectedFile(nextLibrary: StudyLibrary) {
     if (!jsonFileHandleRef.current) {
@@ -344,13 +491,15 @@ function App() {
 
   async function syncFromCloud(token: string, announce = true) {
     try {
-      const [remoteLibrary, remoteSettings] = await Promise.all([
+      const [remoteLibrary, remoteSettings, remoteResults] = await Promise.all([
         fetchRemoteLibrary(token),
         fetchRemoteSettings(token),
+        fetchRemoteResults(token),
       ])
       const sanitizedLibrary = sanitizeLibrary(remoteLibrary)
 
       setLibrary(sanitizedLibrary)
+      setResultRecords((current) => mergeResultRecords(normalizeResultRecords(remoteResults), current))
       setOpenAiSettings((current) => ({
         ...current,
         apiKey: '',
@@ -358,6 +507,7 @@ function App() {
         availableModels: remoteSettings.availableModels,
         lastSyncedAt: remoteSettings.lastSyncedAt,
         language: remoteSettings.language,
+        targetLevel: remoteSettings.targetLevel,
       }))
       setHasStoredApiKey(remoteSettings.hasStoredApiKey)
 
@@ -376,7 +526,7 @@ function App() {
   }
 
   function patchEntries(nextEntries: StudyEntry[], title = library.title) {
-    persistLibrary(createLibrary(nextEntries, title, library.quizSets))
+    persistLibrary(createLibrary(nextEntries, title, library.quizSets, library.level))
   }
 
   function startSessionFromQuizSet(quizSet: QuizSet) {
@@ -390,6 +540,19 @@ function App() {
     })
     setActiveQuestionIndex(0)
     setRemainingMs(quizSet.durationMinutes * 60_000)
+  }
+
+  function submitSession() {
+    setSession((current) => {
+      if (!current || current.submittedAt) {
+        return current
+      }
+
+      return {
+        ...current,
+        submittedAt: Date.now(),
+      }
+    })
   }
 
   function answerQuestion(question: QuizQuestion, answer: SessionAnswer) {
@@ -536,6 +699,7 @@ function App() {
         type: entryForm.type,
         term,
         language: openAiSettings.language,
+        targetLevel: openAiSettings.targetLevel,
       })
 
       setLibrary(nextLibrary)
@@ -551,8 +715,271 @@ function App() {
     }
   }
 
+  function startEditEntry(entry: StudyEntry) {
+    setEditingEntryId(entry.id)
+    setEditForm({
+      type: entry.type,
+      term: entry.term,
+      reading: entry.reading ?? '',
+      meaning: entry.meaning,
+      example: entry.example ?? '',
+      notes: entry.notes ?? '',
+    })
+  }
+
+  function cancelEditEntry() {
+    setEditingEntryId(null)
+    setEditForm(emptyEntryEditForm())
+  }
+
+  function saveEditedEntry(entryId: string) {
+    const existingEntry = library.entries.find((entry) => entry.id === entryId)
+    const term = editForm.term.trim()
+    const meaning = editForm.meaning.trim()
+    const reading = editForm.reading.trim()
+    const example = editForm.example.trim()
+    const notes = editForm.notes.trim()
+
+    if (!existingEntry || !term || !meaning) {
+      setSavingStatus(tr('termMeaningRequired'))
+      return
+    }
+
+    const nextEntry = normalizeEntry(
+      {
+        ...existingEntry,
+        type: editForm.type,
+        subsection: editForm.type,
+        term,
+        reading: reading || undefined,
+        meaning,
+        example: example || undefined,
+        notes: notes || undefined,
+        item_type: existingEntry.type === editForm.type ? existingEntry.item_type : undefined,
+        status: undefined,
+        generationError: undefined,
+        completedAt: new Date().toISOString(),
+        passage: {
+          ...existingEntry.passage,
+          text: example || null,
+          segments: example ? [example] : [],
+        },
+        question: {
+          ...existingEntry.question,
+          stem: term,
+        },
+        explanation: {
+          ja: language === 'ja' ? (notes || null) : existingEntry.explanation.ja,
+          zh: language === 'zh-CN' ? (notes || null) : existingEntry.explanation.zh,
+          grammar_points:
+            editForm.type === 'grammar'
+              ? existingEntry.type === editForm.type
+                ? existingEntry.explanation.grammar_points
+                : [term]
+              : [],
+          vocab_points:
+            editForm.type === 'vocabulary'
+              ? existingEntry.type === editForm.type
+                ? existingEntry.explanation.vocab_points
+                : [term]
+              : [],
+        },
+      },
+      existingEntry.sourceTitle,
+    )
+
+    if (!nextEntry) {
+      setSavingStatus(tr('termMeaningRequired'))
+      return
+    }
+
+    patchEntries(
+      library.entries.map((entry) => (entry.id === entryId ? nextEntry : entry)),
+      library.title,
+    )
+    cancelEditEntry()
+    setSavingStatus(tr('entryUpdated', { term }))
+  }
+
+  async function regenerateEntry(entry: StudyEntry) {
+    const term = entry.term.trim()
+
+    if (!term || entry.status === 'pending') {
+      return
+    }
+
+    if (!userSession) {
+      openSettingsPage('account')
+      setSavingStatus(tr('signInBeforeAiEntry'))
+      return
+    }
+
+    if (!hasStoredApiKey) {
+      openSettingsPage('openai')
+      setSavingStatus(tr('addApiKeyBeforeAiEntry'))
+      return
+    }
+
+    setRegeneratingEntryId(entry.id)
+
+    if (editingEntryId === entry.id) {
+      cancelEditEntry()
+    }
+
+    try {
+      const { library: nextLibrary } = await regenerateRemoteEntry(userSession.token, entry.id, {
+        type: entry.type,
+        term,
+        language: openAiSettings.language,
+        targetLevel: openAiSettings.targetLevel,
+      })
+
+      setLibrary(nextLibrary)
+      setSavingStatus(tr('entryAiRegenerating', { term }))
+    } catch (error) {
+      setSavingStatus(error instanceof Error ? error.message : tr('entryAiFailed'))
+    } finally {
+      setRegeneratingEntryId((current) => (current === entry.id ? null : current))
+    }
+  }
+
   function removeEntry(entryId: string) {
+    if (editingEntryId === entryId) {
+      cancelEditEntry()
+    }
+
     patchEntries(library.entries.filter((entry) => entry.id !== entryId))
+  }
+
+  function renderLibraryEntries(entries: StudyEntry[]) {
+    if (!entries.length) {
+      return (
+        <div className="empty-state compact">
+          <p>{tr('noEntriesYet')}</p>
+        </div>
+      )
+    }
+
+    return (
+      <div className="entry-table scrollable large-scroll">
+        {entries.map((entry) => (
+          <div key={entry.id} className="entry-row">
+            <div className="entry-content">
+              <div className="entry-primary">
+                <strong>{entry.term}</strong>
+                <p>
+                  {entry.type} · {entry.item_type} · {entry.status === 'pending'
+                    ? tr('entryAiPending')
+                    : entry.status === 'failed'
+                      ? tr('entryAiFailed')
+                      : entry.meaning}
+                </p>
+                {entry.reading ? <p className="muted">{entry.reading}</p> : null}
+                {entry.status === 'failed' && entry.generationError ? (
+                  <p className="muted">{entry.generationError}</p>
+                ) : null}
+                {isEntryReady(entry) && entry.example ? (
+                  <p className="muted">{entry.example}</p>
+                ) : null}
+              </div>
+
+              <div className="entry-actions">
+                <button
+                  className="ghost-button compact"
+                  disabled={entry.status === 'pending'}
+                  onClick={() =>
+                    editingEntryId === entry.id ? cancelEditEntry() : startEditEntry(entry)
+                  }
+                >
+                  {editingEntryId === entry.id ? tr('cancel') : tr('edit')}
+                </button>
+                <button
+                  className="ghost-button compact"
+                  disabled={entry.status === 'pending' || regeneratingEntryId === entry.id}
+                  onClick={() => void regenerateEntry(entry)}
+                >
+                  {regeneratingEntryId === entry.id ? tr('regeneratingEntry') : tr('regenerate')}
+                </button>
+                <button className="ghost-button compact" onClick={() => removeEntry(entry.id)}>{tr('remove')}</button>
+              </div>
+            </div>
+
+            {editingEntryId === entry.id ? (
+              <div className="entry-edit-form">
+                <div className="entry-edit-grid">
+                  <label>
+                    {tr('type')}
+                    <select
+                      value={editForm.type}
+                      onChange={(event) =>
+                        setEditForm((current) => ({
+                          ...current,
+                          type: event.target.value as EntryType,
+                        }))
+                      }
+                    >
+                      <option value="vocabulary">{tr('vocabulary')}</option>
+                      <option value="grammar">{tr('grammar')}</option>
+                    </select>
+                  </label>
+                  <label>
+                    {tr('termOrPattern')}
+                    <input
+                      value={editForm.term}
+                      onChange={(event) =>
+                        setEditForm((current) => ({ ...current, term: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    {tr('reading')}
+                    <input
+                      value={editForm.reading}
+                      onChange={(event) =>
+                        setEditForm((current) => ({ ...current, reading: event.target.value }))
+                      }
+                      placeholder={tr('optional')}
+                    />
+                  </label>
+                  <label>
+                    {tr('meaning')}
+                    <input
+                      value={editForm.meaning}
+                      onChange={(event) =>
+                        setEditForm((current) => ({ ...current, meaning: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label className="wide">
+                    {tr('exampleSentence')}
+                    <textarea
+                      value={editForm.example}
+                      onChange={(event) =>
+                        setEditForm((current) => ({ ...current, example: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label className="wide">
+                    {tr('notes')}
+                    <textarea
+                      value={editForm.notes}
+                      onChange={(event) =>
+                        setEditForm((current) => ({ ...current, notes: event.target.value }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="button-row">
+                  <button className="primary-button" onClick={() => saveEditedEntry(entry.id)}>{tr('save')}</button>
+                  <button className="ghost-button" onClick={cancelEditEntry}>{tr('cancel')}</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    )
   }
 
   function resetToStarter() {
@@ -578,6 +1005,7 @@ function App() {
         selectedModel: remoteSettings.selectedModel,
         lastSyncedAt: remoteSettings.lastSyncedAt,
         language: remoteSettings.language,
+        targetLevel: remoteSettings.targetLevel,
       }))
       setHasStoredApiKey(remoteSettings.hasStoredApiKey)
       setAiStatus(tr('fetchedModels'))
@@ -613,6 +1041,7 @@ function App() {
         durationMinutes: selectedPreset.durationMinutes,
         label: `${presetLabel(selectedPreset)} · ${tr('aiGeneratedSet')}`,
         language: openAiSettings.language,
+        targetLevel: openAiSettings.targetLevel,
       })
       setLibrary(nextLibrary)
       setAiStatus(tr('generatedQuizNamed', { title: quizSet.title }))
@@ -665,6 +1094,7 @@ function App() {
         apiKey: openAiSettings.apiKey.trim() || undefined,
         selectedModel: openAiSettings.selectedModel,
         language: openAiSettings.language,
+        targetLevel: openAiSettings.targetLevel,
       })
       setOpenAiSettings((current) => ({
         ...current,
@@ -673,6 +1103,7 @@ function App() {
         availableModels: remoteSettings.availableModels,
         lastSyncedAt: remoteSettings.lastSyncedAt,
         language: remoteSettings.language,
+        targetLevel: remoteSettings.targetLevel,
       }))
       setHasStoredApiKey(remoteSettings.hasStoredApiKey)
       setAuthStatus('Cloud settings saved.')
@@ -706,16 +1137,7 @@ function App() {
             </div>
             <button
               className="ghost-button"
-              onClick={() =>
-                setSession((current) =>
-                  current
-                    ? {
-                        ...current,
-                        submittedAt: current.submittedAt ?? Date.now(),
-                      }
-                    : current,
-                )
-              }
+              onClick={submitSession}
             >
               {tr('submitExam')}
             </button>
@@ -831,6 +1253,17 @@ function App() {
                 {correctCount} / {questions.length} correct
               </h2>
               <p className="session-subtitle">{tr('overallScore', { score: scorePercent })}</p>
+              <div className="button-row centered-row">
+                <button
+                  className="ghost-button compact"
+                  onClick={() => {
+                    setCurrentView('records')
+                    setSession(null)
+                  }}
+                >
+                  {tr('records')}
+                </button>
+              </div>
             </div>
 
             <div className="score-strip large">
@@ -846,6 +1279,10 @@ function App() {
                 <strong>{scorePercent}%</strong>
                 <span>{tr('score')}</span>
               </div>
+              <div>
+                <strong>{formatRemainingTime(elapsedMs)}</strong>
+                <span>{tr('timeSpent')}</span>
+              </div>
             </div>
 
             <div className="results-list full">
@@ -856,34 +1293,7 @@ function App() {
                     ? Array.isArray(answer) && answer.join('||') === question.correctOrder.join('||')
                     : typeof answer === 'number' && answer === question.correctIndex
 
-                return (
-                  <article
-                    key={question.id}
-                    className={isCorrect ? 'result-card good' : 'result-card bad'}
-                  >
-                    <p className="result-index">Question {index + 1}</p>
-                    {question.itemType ? <p className="muted">{question.itemType}</p> : null}
-                    <p className="question-prompt small">{question.prompt}</p>
-                    {question.kind !== 'order_select' && 'sentence' in question && question.sentence ? (
-                      <p className="muted">{question.sentence}</p>
-                    ) : null}
-                    {question.kind === 'order_select' ? (
-                      <>
-                        <p>{tr('yourAnswer')}: {Array.isArray(answer) ? answer.join(' ') : tr('notAnswered')}</p>
-                        <p>{tr('correctAnswer')}: {question.correctOrder.join(' ')}</p>
-                      </>
-                    ) : (
-                      <>
-                        <p>
-                          {tr('yourAnswer')}:{' '}
-                          {typeof answer === 'number' ? question.choices[answer] : tr('notAnswered')}
-                        </p>
-                        <p>{tr('correctAnswer')}: {question.choices[question.correctIndex]}</p>
-                      </>
-                    )}
-                    <p className="muted">{question.explanation}</p>
-                  </article>
-                )
+                return renderQuestionReview(question, answer, index + 1, isCorrect ? 'good' : 'bad')
               })}
             </div>
 
@@ -902,10 +1312,12 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="topbar-copy">
-          <p className="eyebrow">JLPT N2 Simulator</p>
+          <p className="eyebrow">JLPT {openAiSettings.targetLevel} Simulator</p>
           <h1 className="page-title">
             {currentView === 'library'
               ? tr('libraryPageTitle')
+              : currentView === 'records'
+                ? tr('recordsPageTitle')
               : currentView === 'settings'
                 ? tr('settingsPageTitle')
                 : tr('homeTitle')}
@@ -924,6 +1336,12 @@ function App() {
               onClick={() => setCurrentView('library')}
             >
               {tr('library')}
+            </button>
+            <button
+              className={currentView === 'records' ? 'ghost-button active-tab' : 'ghost-button'}
+              onClick={() => setCurrentView('records')}
+            >
+              {tr('records')}
             </button>
             <button
               className={currentView === 'settings' ? 'ghost-button active-tab' : 'ghost-button'}
@@ -1019,6 +1437,9 @@ function App() {
               <div className="ai-overview">
                 <p>
                   {tr('model')}: <strong>{openAiSettings.selectedModel}</strong>
+                </p>
+                <p>
+                  {tr('learningTarget')}: <strong>{openAiSettings.targetLevel}</strong>
                 </p>
                 <p>
                   {tr('apiKey')}: <strong>{hasStoredApiKey ? tr('configured') : tr('missing')}</strong>
@@ -1200,38 +1621,124 @@ function App() {
             </article>
           </section>
 
-          <section className="grid">
-            <article className="panel panel-wide">
+          <section className="grid library-split-grid">
+            <article className="panel">
               <div className="panel-head">
                 <div>
                   <p className="section-label">{tr('entries')}</p>
-                  <h2>{tr('currentLibrary')}</h2>
+                  <h2>{tr('vocabulary')}</h2>
+                  <p className="muted">{tr('entriesCount', { count: vocabularyEntries.length })}</p>
                 </div>
               </div>
 
-              <div className="entry-table scrollable large-scroll">
-                {library.entries.map((entry) => (
-                  <div key={entry.id} className="entry-row">
-                    <div>
-                      <strong>{entry.term}</strong>
-                      <p>
-                        {entry.type} · {entry.item_type} · {entry.status === 'pending'
-                          ? tr('entryAiPending')
-                          : entry.status === 'failed'
-                            ? tr('entryAiFailed')
-                            : entry.meaning}
-                      </p>
-                      {entry.status === 'failed' && entry.generationError ? (
-                        <p className="muted">{entry.generationError}</p>
-                      ) : null}
-                      {isEntryReady(entry) && entry.example ? (
-                        <p className="muted">{entry.example}</p>
-                      ) : null}
-                    </div>
-                    <button className="ghost-button compact" onClick={() => removeEntry(entry.id)}>{tr('remove')}</button>
-                  </div>
-                ))}
+              {renderLibraryEntries(vocabularyEntries)}
+            </article>
+
+            <article className="panel">
+              <div className="panel-head">
+                <div>
+                  <p className="section-label">{tr('entries')}</p>
+                  <h2>{tr('grammar')}</h2>
+                  <p className="muted">{tr('entriesCount', { count: grammarEntries.length })}</p>
+                </div>
               </div>
+
+              {renderLibraryEntries(grammarEntries)}
+            </article>
+          </section>
+        </>
+      ) : null}
+
+      {currentView === 'records' ? (
+        <>
+          <section className="hero-panel compact">
+            <div className="hero-copy">
+              <div>
+                <p className="hero-kicker">{tr('records')}</p>
+                <p className="lede">{tr('recordsHeroDescription')}</p>
+              </div>
+              <div className="hero-stats">
+                <div className="stat-card accent">
+                  <span>{resultRecords.length}</span>
+                  <p>{tr('attempts')}</p>
+                </div>
+                <div className="stat-card">
+                  <span>{totalMistakeCount}</span>
+                  <p>{tr('wrongAnswers')}</p>
+                </div>
+                <div className="stat-card">
+                  <span>{latestResultRecord ? `${latestResultRecord.scorePercent}%` : '—'}</span>
+                  <p>{tr('latestScore')}</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="grid records-grid">
+            <article className="panel">
+              <div className="panel-head">
+                <div>
+                  <p className="section-label">{tr('records')}</p>
+                  <h2>{tr('latestAttempts')}</h2>
+                </div>
+              </div>
+
+              {resultRecords.length ? (
+                <div className="records-list">
+                  {resultRecords.map((record) => (
+                    <button
+                      key={record.id}
+                      className={record.id === selectedResultRecord?.id ? 'record-card active' : 'record-card'}
+                      onClick={() => setSelectedResultRecordId(record.id)}
+                    >
+                      <div className="record-card-head">
+                        <strong>{record.quizTitle}</strong>
+                        <span>{record.scorePercent}%</span>
+                      </div>
+                      <p className="muted">{formatDate(record.submittedAt, language)}</p>
+                      <p className="muted">
+                        {tr('questionsCount', { count: record.questionCount })} · {tr('wrongAnswersCount', { count: record.incorrectQuestions.length })} ·{' '}
+                        {tr('timeSpent')}: {formatRemainingTime(record.durationMs)}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state compact">
+                  <p>{tr('noResultRecords')}</p>
+                </div>
+              )}
+            </article>
+
+            <article className="panel">
+              <div className="panel-head">
+                <div>
+                  <p className="section-label">{tr('reviewMistakes')}</p>
+                  <h2>{selectedResultRecord ? selectedResultRecord.quizTitle : tr('reviewMistakes')}</h2>
+                  {selectedResultRecord ? (
+                    <p className="muted">
+                      {formatDate(selectedResultRecord.submittedAt, language)} · {selectedResultRecord.scorePercent}% · {tr('timeSpent')}:{' '}
+                      {formatRemainingTime(selectedResultRecord.durationMs)}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              {!selectedResultRecord ? (
+                <div className="empty-state compact">
+                  <p>{tr('noResultRecords')}</p>
+                </div>
+              ) : selectedResultRecord.incorrectQuestions.length ? (
+                <div className="results-list full">
+                  {selectedResultRecord.incorrectQuestions.map((item) =>
+                    renderQuestionReview(item.question, item.userAnswer, item.questionNumber, 'bad'),
+                  )}
+                </div>
+              ) : (
+                <div className="empty-state compact">
+                  <p>{tr('perfectRun')}</p>
+                </div>
+              )}
             </article>
           </section>
         </>
@@ -1325,6 +1832,24 @@ function App() {
                     </div>
 
                     <div className="form-grid">
+                      <label>
+                        {tr('learningTarget')}
+                        <select
+                          value={openAiSettings.targetLevel}
+                          onChange={(event) =>
+                            setOpenAiSettings((current) => ({
+                              ...current,
+                              targetLevel: event.target.value as OpenAiSettings['targetLevel'],
+                            }))
+                          }
+                        >
+                          {jlptLevels.map((level) => (
+                            <option key={level} value={level}>
+                              {level}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <label>
                         {tr('language')}
                         <select

@@ -1,7 +1,8 @@
-import { createEntryId, createQuizSetId, defaultLanguage, defaultOpenAiModels } from './constants'
+import { createEntryId, createQuizSetId, defaultLanguage, defaultOpenAiModels, defaultTargetLevel } from './constants'
 import type {
   EntryType,
   JlptSection,
+  JlptLevel,
   LanguageCode,
   OpenAiSettings,
   QuizQuestion,
@@ -32,6 +33,7 @@ type OpenAiResponse = {
 
 type RawAiQuestion = Record<string, unknown>
 type RawEntryDetails = Record<string, unknown>
+type SourceEntryMap = Map<string, Pick<StudyEntry, 'id' | 'term' | 'reading'>>
 
 function outputLanguageLabel(language: LanguageCode) {
   if (language === 'zh-CN') {
@@ -93,13 +95,72 @@ function normalizeSentence(value: unknown) {
   return value.trim()
 }
 
+function normalizeComparableText(value: string) {
+  return value
+    .normalize('NFKC')
+    .replace(/[\s\u3000]+/gu, '')
+    .toLowerCase()
+}
+
+function hasDuplicateChoices(choices: string[]) {
+  const seen = new Set<string>()
+
+  for (const choice of choices) {
+    const normalized = normalizeComparableText(choice)
+
+    if (!normalized || seen.has(normalized)) {
+      return true
+    }
+
+    seen.add(normalized)
+  }
+
+  return false
+}
+
+function containsExactChoiceText(haystack: string, choice: string) {
+  const normalizedChoice = normalizeComparableText(choice)
+
+  if (!normalizedChoice) {
+    return false
+  }
+
+  return normalizeComparableText(haystack).includes(normalizedChoice)
+}
+
+function extractQuotedTarget(prompt: string) {
+  const match = prompt.match(/[「『]([^「」『』]+)[」』]/u)
+  return match?.[1]?.trim() || ''
+}
+
 function hasSpecificSingleSelectPrompt(prompt: string) {
   return /[「『][^「」『』]+[」』]/u.test(prompt)
 }
 
-function normalizeAiQuestion(question: RawAiQuestion): QuizQuestion | null {
+function resolveSourceEntry(
+  sourceEntries: SourceEntryMap,
+  sourceEntryId: string,
+  prompt: string,
+) {
+  const direct = sourceEntries.get(sourceEntryId)
+
+  if (direct) {
+    return direct
+  }
+
+  const quotedTarget = extractQuotedTarget(prompt)
+
+  if (!quotedTarget) {
+    return undefined
+  }
+
+  return Array.from(sourceEntries.values()).find((entry) => entry.term === quotedTarget)
+}
+
+function normalizeAiQuestion(question: RawAiQuestion, sourceEntries: SourceEntryMap): QuizQuestion | null {
   const prompt = typeof question.prompt === 'string' ? question.prompt.trim() : ''
   const explanation = typeof question.explanation === 'string' ? question.explanation.trim() : ''
+  const sourceEntryId = typeof question.sourceEntryId === 'string' ? question.sourceEntryId.trim() : ''
   const section: EntryType | 'mixed' =
     question.section === 'grammar' || question.section === 'vocabulary' ? question.section : 'mixed'
   const itemType =
@@ -113,12 +174,15 @@ function normalizeAiQuestion(question: RawAiQuestion): QuizQuestion | null {
       ? question.jlptSection
       : 'language_knowledge'
 
-  if (!prompt || !explanation || !itemType) {
+  if (!prompt || !explanation || !itemType || !sourceEntryId) {
     return null
   }
 
+  const sourceEntry = resolveSourceEntry(sourceEntries, sourceEntryId, prompt)
+
   const base = {
     id: createEntryId(),
+    sourceEntryId,
     section,
     prompt,
     explanation,
@@ -156,14 +220,25 @@ function normalizeAiQuestion(question: RawAiQuestion): QuizQuestion | null {
       ? question.correctIndex
       : -1
 
-  if (choices.length !== 4 || correctIndex < 0 || correctIndex >= choices.length) {
+  if (choices.length !== 4 || correctIndex < 0 || correctIndex >= choices.length || hasDuplicateChoices(choices)) {
     return null
   }
 
+  const correctChoice = choices[correctIndex]
+  const sourceReading = sourceEntry?.reading ? normalizeComparableText(sourceEntry.reading) : ''
+
   if (expectedKind === 'cloze_select') {
     const sentence = normalizeSentence(question.sentence)
+    const blankCount = sentence.match(/＿+/gu)?.length ?? 0
 
-    if (!sentence || !sentence.includes('＿＿＿')) {
+    if (!sentence || !sentence.includes('＿＿＿') || blankCount !== 1) {
+      return null
+    }
+
+    if (
+      containsExactChoiceText(prompt, correctChoice) ||
+      containsExactChoiceText(sentence.replace(/＿+/gu, ''), correctChoice)
+    ) {
       return null
     }
 
@@ -180,6 +255,18 @@ function normalizeAiQuestion(question: RawAiQuestion): QuizQuestion | null {
 
   if (!sentence && !hasSpecificSingleSelectPrompt(prompt)) {
     return null
+  }
+
+  if (containsExactChoiceText(prompt, correctChoice) || (sentence && containsExactChoiceText(sentence, correctChoice))) {
+    return null
+  }
+
+  if (itemType === '言い換え類義' && sourceReading) {
+    const hasReadingChoice = choices.some((choice) => normalizeComparableText(choice) === sourceReading)
+
+    if (hasReadingChoice) {
+      return null
+    }
   }
 
   return {
@@ -211,6 +298,7 @@ function makeQuizSchema() {
               'kind',
               'section',
               'jlptSection',
+              'sourceEntryId',
               'itemType',
               'prompt',
               'explanation',
@@ -229,6 +317,7 @@ function makeQuizSchema() {
                 type: 'string',
                 enum: ['vocabulary', 'grammar', 'mixed'],
               },
+              sourceEntryId: { type: 'string' },
               jlptSection: {
                 type: 'string',
                 enum: ['language_knowledge'],
@@ -419,14 +508,24 @@ export async function generateAiQuizSet({
   model,
   entries,
   durationMinutes,
-  language,
+  targetLevel,
 }: {
   apiKey: string
   model: string
   entries: StudyEntry[]
   durationMinutes: number
-  language: LanguageCode
+  targetLevel: JlptLevel
 }): Promise<QuizSet> {
+  const sourceEntries = new Map(
+    entries.map((entry) => [
+      entry.id,
+      {
+        id: entry.id,
+        term: entry.term,
+        reading: entry.reading,
+      },
+    ]),
+  )
   const trimmedEntries = entries.slice(0, 80).map((entry) => ({
     id: entry.id,
     section: entry.section,
@@ -441,31 +540,37 @@ export async function generateAiQuizSet({
   }))
 
   const instructions = [
-    'Generate a realistic JLPT N2 language knowledge quiz set.',
+    `Generate a realistic JLPT ${targetLevel} language knowledge quiz set.`,
     'Use only the provided source material. Do not invent grammar points or vocabulary outside the input.',
-    'Match the real JLPT N2 forms instead of generic quiz styles.',
-    `Write title, prompt, and explanation in ${outputLanguageLabel(language)}.`,
-    'Keep sentence, choices, fragments, correctOrder, and quoted target expressions in natural Japanese because the tested material is JLPT Japanese.',
+    `Match the real JLPT ${targetLevel} forms and difficulty instead of generic quiz styles.`,
+    'Write every quiz field in natural Japanese, including title, prompt, explanation, sentence, choices, fragments, correctOrder, and quoted target expressions.',
+    'Do not output English or Chinese in any quiz field.',
     'Use these mappings strictly:',
     '- 漢字読み, 表記, 語形成, 言い換え類義, 用法, 文の文法1 => kind=single_select',
     '- 文脈規定, 文の文法2 => kind=cloze_select',
     '- 文章の文法 => kind=order_select',
     'Every question object must include every schema key. Use null for fields that do not apply.',
+    'Every question must include sourceEntryId set to the id of the source_material entry it is based on.',
     'For single_select, the question must be answerable from the output alone. Include a natural Japanese sentence in sentence, or explicitly name the target word or grammar pattern in prompt like 「食べかけ」.',
     'For cloze_select, include exactly one blank shown as ＿＿＿ in sentence.',
     'For single_select and cloze_select, provide exactly 4 choices and a zero-based correctIndex.',
     'Do not use generic prompts like 「文の意味に最も合うものを選んでください」 unless the prompt also names the target expression.',
+    'For single_select, the correct choice must be a paraphrase, definition, or interpretation, not the same surface form as the target expression shown in prompt or sentence.',
+    'Do not place the exact correct choice text verbatim in prompt or sentence for single_select.',
+    'For 言い換え類義, choices must be semantic paraphrases or near-synonyms in Japanese. Never use the target reading, kana transcription, pronunciation guide, or spelling-only variant as any choice.',
+    'For cloze_select, the correct choice must only fit the blank and must not already appear elsewhere in prompt or sentence.',
     'For order_select, fragments and correctOrder must contain the same strings in different order.',
     'For single_select and cloze_select, set fragments=null and correctOrder=null.',
     'For cloze_select, sentence must be a string and choices/correctIndex must be non-null.',
     'For single_select, choices/correctIndex must be non-null. sentence may be null only if prompt names the target expression explicitly.',
     'For order_select, set sentence=null, choices=null, and correctIndex=null.',
-    'Keep Japanese natural, concise, and close to real JLPT N2 wording.',
+    `Keep Japanese natural, concise, and close to real JLPT ${targetLevel} wording.`,
     'Avoid duplicate stems, duplicate answers, and obvious distractors.',
     'Set jlptSection to language_knowledge for every question.',
   ].join('\n')
 
   const input = JSON.stringify({
+    target_level: targetLevel,
     target_duration_minutes: durationMinutes,
     question_count_target: targetQuestionCount,
     minimum_question_count: minimumQuestionCount,
@@ -489,12 +594,12 @@ export async function generateAiQuizSet({
   })
 
   const questions: QuizQuestion[] = parsed.questions
-    .map((question) => normalizeAiQuestion(question))
+    .map((question) => normalizeAiQuestion(question, sourceEntries))
     .filter((question): question is QuizQuestion => Boolean(question))
 
   const quizSet: QuizSet = {
     id: createQuizSetId(),
-    title: parsed.title || 'AI Generated N2 Set',
+    title: parsed.title || `AI生成 ${targetLevel} セット`,
     source: 'ai',
     createdAt: new Date().toISOString(),
     durationMinutes: parsed.durationMinutes || durationMinutes,
@@ -515,25 +620,28 @@ export async function generateAiEntryDetails({
   type,
   term,
   language,
+  targetLevel,
 }: {
   apiKey: string
   model: string
   type: EntryType
   term: string
   language: LanguageCode
+  targetLevel: JlptLevel
 }) {
   const instructions = [
-    'Generate supporting study-card details for a single JLPT N2 entry.',
+    `Generate supporting study-card details for a single JLPT ${targetLevel} entry.`,
     'Do not add furigana formatting, markdown, numbering, or commentary outside the schema.',
     `Return a concise ${outputLanguageLabel(language)} meaning.`,
     'Return one natural Japanese example sentence that clearly uses the term or pattern.',
     `Return a short ${outputLanguageLabel(language)} usage note in notes when helpful; otherwise null.`,
+    `Keep the wording, complexity, and nuance appropriate for JLPT ${targetLevel}.`,
     'For vocabulary, return reading in kana when applicable.',
     'For grammar, reading should usually be null unless a kana reading is genuinely useful.',
     'Choose an itemType that fits the term and the selected entry type.',
   ].join('\n')
 
-  const input = JSON.stringify({ type, term })
+  const input = JSON.stringify({ type, term, targetLevel })
   const parsed = await requestStructuredOutput<RawEntryDetails>({
     apiKey,
     model,
@@ -556,5 +664,6 @@ export function createDefaultOpenAiSettings(): OpenAiSettings {
     selectedModel: defaultOpenAiModels[0],
     availableModels: defaultOpenAiModels,
     language: defaultLanguage,
+    targetLevel: defaultTargetLevel,
   }
 }

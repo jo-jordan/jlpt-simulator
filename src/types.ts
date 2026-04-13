@@ -1,6 +1,7 @@
 export type EntryType = 'vocabulary' | 'grammar'
 export type StudyEntryStatus = 'pending' | 'failed'
 export type LanguageCode = 'en' | 'zh-CN' | 'ja'
+export type JlptLevel = 'N1' | 'N2' | 'N3' | 'N4' | 'N5'
 export type JlptSection = 'language_knowledge' | 'reading' | 'listening'
 export type JlptSubsection = 'vocabulary' | 'grammar' | 'reading' | 'listening'
 export type JlptSourceType = 'original' | 'adapted' | 'official_sample' | 'workbook'
@@ -48,7 +49,7 @@ export interface JlptExplanation {
 
 export interface StudyEntry {
   id: string
-  level: 'N2'
+  level: JlptLevel
   section: JlptSection
   subsection: JlptSubsection
   item_type: string
@@ -78,6 +79,7 @@ export interface StudyEntry {
 
 export interface QuizQuestionBase {
   id: string
+  sourceEntryId?: string
   section: EntryType | 'mixed'
   prompt: string
   explanation: string
@@ -119,7 +121,7 @@ export interface QuizSet {
 
 export interface StudyLibrary {
   title: string
-  level: string
+  level: JlptLevel
   updatedAt: string
   entries: StudyEntry[]
   quizSets: QuizSet[]
@@ -142,6 +144,7 @@ export interface ExamSession {
   quizSet: QuizSet
   answers: Record<string, SessionAnswer>
   submittedAt?: number
+  resultRecordId?: string
 }
 
 export interface OpenAiSettings {
@@ -150,4 +153,25 @@ export interface OpenAiSettings {
   availableModels: string[]
   lastSyncedAt?: string
   language: LanguageCode
+  targetLevel: JlptLevel
+}
+
+export interface IncorrectQuestionRecord {
+  questionNumber: number
+  question: QuizQuestion
+  userAnswer?: SessionAnswer
+}
+
+export interface QuizResultRecord {
+  id: string
+  quizSetId: string
+  quizTitle: string
+  submittedAt: string
+  startedAt: string
+  durationMs: number
+  answeredCount: number
+  correctCount: number
+  questionCount: number
+  scorePercent: number
+  incorrectQuestions: IncorrectQuestionRecord[]
 }

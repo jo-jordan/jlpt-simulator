@@ -153,6 +153,10 @@
   align-items: start;
 }
 
+.library-split-grid {
+  align-items: start;
+}
+
 .panel {
   display: grid;
   align-content: start;
@@ -187,7 +191,8 @@
 .saved-list,
 .choice-list,
 .results-list,
-.entry-table {
+.entry-table,
+.records-list {
   display: grid;
   gap: 12px;
 }
@@ -258,7 +263,8 @@ textarea {
 .preset:hover,
 .choice:hover,
 .index-pill:hover,
-.fragment:hover {
+.fragment:hover,
+.record-card:hover {
   transform: translateY(-1px);
 }
 
@@ -297,6 +303,34 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.record-card {
+  width: 100%;
+  padding: 16px 18px;
+  border: 1px solid rgba(98, 72, 44, 0.12);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.78);
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.record-card.active {
+  background: rgba(199, 104, 45, 0.14);
+  border-color: rgba(199, 104, 45, 0.36);
+}
+
+.record-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .setting-card {
@@ -411,20 +445,63 @@ textarea {
 .entry-row {
   padding: 14px 0;
   border-top: 1px solid rgba(98, 72, 44, 0.1);
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
 }
 
-.entry-row > div,
 .saved-card > div,
 .snapshot-card,
-.session-cta > div {
+.session-cta > div,
+.entry-primary {
   min-width: 0;
   display: grid;
   gap: 6px;
 }
 
+.entry-content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.entry-edit-form {
+  display: grid;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(98, 72, 44, 0.08);
+}
+
+.entry-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.entry-edit-grid label {
+  display: grid;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.entry-edit-grid .wide {
+  grid-column: 1 / -1;
+}
+
 .inline-actions {
   margin-bottom: 0;
+}
+
+.centered-row {
+  justify-content: center;
 }
 
 .session-shell {
@@ -571,13 +648,18 @@ textarea {
   gap: 20px;
 }
 
+.records-grid {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  align-items: start;
+}
+
 .results-hero {
   text-align: center;
   padding-top: 24px;
 }
 
 .score-strip.large {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .results-list.full {
@@ -668,8 +750,18 @@ textarea {
   .hero-stats,
   .score-strip,
   .snapshot-grid,
-  .form-grid {
+  .form-grid,
+  .entry-edit-grid {
     grid-template-columns: 1fr;
+  }
+
+  .entry-content {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .entry-actions {
+    justify-content: flex-start;
   }
 
   .settings-backdrop {

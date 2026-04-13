@@ -1,4 +1,4 @@
-import type { LanguageCode, OpenAiSettings, QuizSet, StudyLibrary } from '../types'
+import type { JlptLevel, LanguageCode, OpenAiSettings, QuizResultRecord, QuizSet, StudyLibrary } from '../types'
 
 export interface ApiSessionUser {
   id: string
@@ -63,6 +63,7 @@ export function saveRemoteSettings(
     apiKey?: string
     selectedModel?: string
     language?: OpenAiSettings['language']
+    targetLevel?: JlptLevel
   },
 ) {
   return apiRequest<OpenAiSettings & { hasStoredApiKey: boolean }>('/api/settings', {
@@ -87,9 +88,21 @@ export function saveRemoteLibrary(token: string, library: StudyLibrary) {
   return apiRequest<StudyLibrary>('/api/library', { method: 'PUT', token, body: library })
 }
 
+export function fetchRemoteResults(token: string) {
+  return apiRequest<QuizResultRecord[]>('/api/results', { token })
+}
+
+export function saveRemoteResult(token: string, record: QuizResultRecord) {
+  return apiRequest<QuizResultRecord>('/api/results', {
+    method: 'POST',
+    token,
+    body: record,
+  })
+}
+
 export function generateRemoteEntry(
   token: string,
-  payload: { type: 'vocabulary' | 'grammar'; term: string; language: LanguageCode },
+  payload: { type: 'vocabulary' | 'grammar'; term: string; language: LanguageCode; targetLevel: JlptLevel },
 ) {
   return apiRequest<{ entryId: string; library: StudyLibrary }>('/api/library/entries/ai', {
     method: 'POST',
@@ -98,9 +111,21 @@ export function generateRemoteEntry(
   })
 }
 
+export function regenerateRemoteEntry(
+  token: string,
+  entryId: string,
+  payload: { type: 'vocabulary' | 'grammar'; term: string; language: LanguageCode; targetLevel: JlptLevel },
+) {
+  return apiRequest<{ entryId: string; library: StudyLibrary }>(`/api/library/entries/${entryId}/regenerate`, {
+    method: 'POST',
+    token,
+    body: payload,
+  })
+}
+
 export function generateRemoteQuiz(
   token: string,
-  payload: { durationMinutes: number; label: string; language: LanguageCode },
+  payload: { durationMinutes: number; label: string; language: LanguageCode; targetLevel: JlptLevel },
 ) {
   return apiRequest<{ quizSet: QuizSet; library: StudyLibrary }>('/api/quiz/generate', {
     method: 'POST',

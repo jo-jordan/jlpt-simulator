@@ -1,5 +1,6 @@
 import { starterLibrary } from '../../src/data/starterLibrary'
 import type { QuizSet, StudyEntry, StudyLibrary } from '../../src/types'
+import { defaultTargetLevel, jlptLevels } from '../../src/lib/constants'
 
 type LibraryMetaRow = {
   title: string
@@ -29,6 +30,12 @@ function parseJson<T>(value: string): T | null {
   }
 }
 
+function normalizeJlptLevel(value: unknown): StudyLibrary['level'] {
+  return typeof value === 'string' && jlptLevels.includes(value as StudyLibrary['level'])
+    ? (value as StudyLibrary['level'])
+    : defaultTargetLevel
+}
+
 export function sanitizeLibrary(library: StudyLibrary): StudyLibrary {
   const quizSets = Array.isArray(library.quizSets)
     ? library.quizSets.filter((quizSet) => quizSet.source === 'ai')
@@ -51,7 +58,7 @@ function stableLibrary(library: StudyLibrary, updatedAt: string): StudyLibrary {
   return {
     ...sanitized,
     title: sanitized.title || starterLibrary.title,
-    level: sanitized.level || starterLibrary.level,
+    level: normalizeJlptLevel(sanitized.level),
     updatedAt,
   }
 }
@@ -283,7 +290,7 @@ export async function loadUserLibrary(db: D1Database, userId: string) {
     return stableLibrary(
       {
         title: meta?.title ?? starterLibrary.title,
-        level: meta?.level ?? starterLibrary.level,
+        level: normalizeJlptLevel(meta?.level),
         updatedAt: meta?.updated_at ?? starterLibrary.updatedAt,
         entries,
         quizSets,
