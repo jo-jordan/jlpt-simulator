@@ -363,47 +363,48 @@ function App() {
   }
 
   function questionPromptText(question: QuizQuestion) {
+    const quizTr = (key: string, params?: Record<string, string | number>) => t('ja', key, params)
     const targetExpression = resolveQuestionTargetExpression(question)
 
     if (question.itemType === '漢字読み' && targetExpression) {
-      return tr('chooseReading', { term: targetExpression })
+      return quizTr('chooseReading', { term: targetExpression })
     }
 
     if (question.itemType === '表記' && targetExpression) {
-      return tr('chooseSpelling', { term: targetExpression })
+      return quizTr('chooseSpelling', { term: targetExpression })
     }
 
     if (question.itemType === '語形成' && targetExpression) {
-      return tr('chooseWordFormation', { term: targetExpression })
+      return quizTr('chooseWordFormation', { term: targetExpression })
     }
 
     if (question.itemType === '言い換え類義' && targetExpression) {
       return question.section === 'grammar'
-        ? tr('chooseClosestMeaningGrammar', { term: targetExpression })
-        : tr('chooseClosestMeaningVocabulary', { term: targetExpression })
+        ? quizTr('chooseClosestMeaningGrammar', { term: targetExpression })
+        : quizTr('chooseClosestMeaningVocabulary', { term: targetExpression })
     }
 
     if (question.itemType === '用法' && targetExpression) {
-      return tr('chooseUsage', { term: targetExpression })
+      return quizTr('chooseUsage', { term: targetExpression })
     }
 
     if (question.kind === 'order_select') {
-      return tr('arrangeFragments')
+      return quizTr('arrangeFragments')
     }
 
     if (question.kind === 'cloze_select') {
-      return question.section === 'grammar' ? tr('chooseGrammarSentence') : tr('chooseWordSentence')
+      return question.section === 'grammar' ? quizTr('chooseGrammarSentence') : quizTr('chooseWordSentence')
     }
 
     if (question.section === 'grammar' && targetExpression) {
-      return tr('chooseClosestMeaningGrammar', { term: targetExpression })
+      return quizTr('chooseClosestMeaningGrammar', { term: targetExpression })
     }
 
     if (question.section === 'vocabulary' && targetExpression) {
-      return tr('chooseClosestMeaningVocabulary', { term: targetExpression })
+      return quizTr('chooseClosestMeaningVocabulary', { term: targetExpression })
     }
 
-    return question.section === 'grammar' ? tr('chooseGrammarSentence') : tr('chooseWordSentence')
+    return question.section === 'grammar' ? quizTr('chooseGrammarSentence') : quizTr('chooseWordSentence')
   }
 
   function formatQuestionAnswer(question: QuizQuestion, answer: SessionAnswer | undefined) {
